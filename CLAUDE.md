@@ -26,6 +26,29 @@ bin/
 
 DEX crates are grouped under `crates/dex/` but remain independent workspace members. Adding a new DEX means adding a folder under `dex/`. `dex-common` holds the `DexCommands` trait so upstream crates depend on the trait, not concrete DEX implementations.
 
+## Phase Planning (REQUIRED)
+
+Before starting work on any implementation phase, you **must** create a detailed plan first. No code without a plan.
+
+### Process
+1. **Create plan**: Write `docs/plans/phase<N>-<name>.md` with detailed breakdown of what will be built, in what order, with what interfaces
+2. **Review with user**: Present the plan for feedback and approval
+3. **Then implement**: Only start coding after the plan is approved
+
+### Plan contents
+- **Goal**: What this phase achieves and why it matters for the next phase
+- **Crates to create/modify**: List each crate with its public API (trait definitions, key structs, function signatures)
+- **Dependencies**: What existing crates this phase depends on, what it provides to future phases
+- **Implementation steps**: Ordered list of concrete tasks (create crate, implement struct X, write function Y)
+- **Test plan**: What tests to write, what test fixtures are needed
+- **Verification**: How to confirm the phase works end-to-end before moving on
+
+### Plan location
+- `docs/plans/phase1-foundation.md`
+- `docs/plans/phase2-math.md`
+- `docs/plans/phase3-strategy.md`
+- etc.
+
 ## Git Workflow
 
 - **Never commit directly to `main`**. Always create a branch first.
@@ -77,7 +100,7 @@ DEX crates are grouped under `crates/dex/` but remain independent workspace memb
 ### What to Test
 - `clmm-math`: Tick-to-sqrt-price conversions, compute_swap_step edge cases (zero liquidity, tick boundary crossing, max/min prices), fee calculations
 - `dex/cetus`, `dex/turbos`: BCS deserialization round-trips against known pool snapshots
-- `arb-engine`: Graph construction, cycle detection, golden section search convergence
+- `arb-engine`: Graph construction, cycle detection, binary search amount optimization
 - `ptb-builder`: PTB command ordering, argument chaining correctness
 
 ### Test Data

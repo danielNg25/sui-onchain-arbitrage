@@ -26,3 +26,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Swapped Phase 3 (Strategy) and Phase 4 (Execution) — find opportunities before building PTBs
 - Changed arb engine to event/tx-driven only — no periodic scanning
 - Replaced golden section search with binary search over `[0, swap_amount]` range from triggering event
+- Added mandatory phase planning requirement to `CLAUDE.md` — must create `docs/plans/phase<N>.md` and get approval before writing any code
