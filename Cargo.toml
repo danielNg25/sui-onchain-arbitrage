@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arb-types",
+    "crates/sui-client",
+    "crates/dex/common",
+    "crates/dex/cetus",
+    "crates/dex/turbos",
+    "crates/pool-manager",
+]
+
+[workspace.dependencies]
+arb-types = { path = "crates/arb-types" }
+dex-common = { path = "crates/dex/common" }
+dex-cetus = { path = "crates/dex/cetus" }
+dex-turbos = { path = "crates/dex/turbos" }
+sui-client = { path = "crates/sui-client" }
+pool-manager = { path = "crates/pool-manager" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bcs = "0.1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+dashmap = "6"
+toml = "0.8"
+tracing = "0.1"
+hex = "0.4"
+base64 = "0.22"
+async-trait = "0.1"
