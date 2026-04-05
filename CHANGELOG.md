@@ -15,3 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `docs/agent/ARCHITECTURE.md` — full technical design document
 - `docs/agent/RESEARCH.md` — Cetus/Turbos/Sui protocol research
 - `docs/agent/RESEARCH_2.md` — supplementary research findings
+
+### Changed
+- Reorganized DEX crates into `crates/dex/` subfolder (`dex/common`, `dex/cetus`, `dex/turbos`)
+- Added `dex-common` crate for shared `DexCommands` trait
+- Updated architecture diagram, dependency DAG, and implementation checklist to reflect new structure

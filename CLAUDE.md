@@ -11,8 +11,10 @@ crates/
   arb-types/       — Shared types (zero I/O deps)
   clmm-math/       — Pure CLMM math (#[no_std]-compatible)
   pool-manager/    — Pool registry, state cache, tick storage
-  dex-cetus/       — Cetus BCS deser, PTB commands, event parsing
-  dex-turbos/      — Turbos BCS deser, PTB commands, event parsing
+  dex/
+    common/        — DexCommands trait, shared DEX types
+    cetus/         — Cetus BCS deser, PTB commands, event parsing
+    turbos/        — Turbos BCS deser, PTB commands, event parsing
   arb-engine/      — Graph, cycle detection, profit sim, amount optimization
   ptb-builder/     — Multi-hop PTB orchestration, flash swap flow
   shio-client/     — WebSocket feed + bid submission
@@ -21,6 +23,8 @@ crates/
 bin/
   arb/             — Main binary, event loop
 ```
+
+DEX crates are grouped under `crates/dex/` but remain independent workspace members. Adding a new DEX means adding a folder under `dex/`. `dex-common` holds the `DexCommands` trait so upstream crates depend on the trait, not concrete DEX implementations.
 
 ## Git Workflow
 

@@ -22,8 +22,10 @@ sui-arbitrage-bot/
 │   ├── arb-types/                 # Shared types, zero I/O deps
 │   ├── clmm-math/                 # Pure CLMM math (#[no_std]-compatible)
 │   ├── pool-manager/              # Pool registry, state cache, tick storage
-│   ├── dex-cetus/                 # Cetus BCS deser, PTB commands, event parsing
-│   ├── dex-turbos/                # Turbos BCS deser, PTB commands, event parsing
+│   ├── dex/
+│   │   ├── common/                # DexCommands trait, shared DEX types
+│   │   ├── cetus/                 # Cetus BCS deser, PTB commands, event parsing
+│   │   └── turbos/                # Turbos BCS deser, PTB commands, event parsing
 │   ├── arb-engine/                # Graph, cycle detection, profit sim, amount optimization
 │   ├── ptb-builder/               # Multi-hop PTB orchestration, flash swap flow
 │   ├── shio-client/               # WebSocket feed + bid submission
@@ -35,15 +37,24 @@ sui-arbitrage-bot/
     └── integration/               # Mainnet fork tests via devInspect
 ```
 
+DEX crates are grouped under `crates/dex/` — each is still an independent crate in the workspace
+(`dex-common`, `dex-cetus`, `dex-turbos`). Adding a new DEX (Aftermath, DeepBook, etc.) is just
+another folder under `dex/`. The `dex-common` crate holds the `DexCommands` trait so `pool-manager`
+and `ptb-builder` depend on the trait, not on individual DEX crates directly.
+
 ### Dependency DAG
 ```
 bin/arb
   ├── arb-engine → clmm-math, arb-types, pool-manager
-  ├── ptb-builder → dex-cetus, dex-turbos, arb-types
+  ├── ptb-builder → dex-common, dex-cetus, dex-turbos, arb-types
   ├── shio-client → arb-types
   ├── gas-manager → sui-client
-  ├── pool-manager → dex-cetus, dex-turbos, clmm-math, arb-types, sui-client
+  ├── pool-manager → dex-common, dex-cetus, dex-turbos, clmm-math, arb-types, sui-client
   └── sui-client → arb-types
+
+dex-cetus → dex-common, arb-types
+dex-turbos → dex-common, arb-types
+dex-common → arb-types
 ```
 
 `clmm-math` and `arb-types` have zero async/IO deps — pure computation, independently benchmarkable.
@@ -191,7 +202,7 @@ Profit is unimodal (concave) for CLMM arbs — rises to peak, falls at deeper li
 
 ## PTB Builder (`ptb-builder`)
 
-### DEX trait
+### DEX trait (defined in `dex-common`)
 ```rust
 pub trait DexCommands {
     fn build_flash_swap(&self, ptb: &mut PTB, pool: &PoolState, a2b: bool, amount: u64) -> Result<FlashSwapResult>;
@@ -316,10 +327,11 @@ whitelisted_tokens = [
 ### Phase 1: Foundation (get data flowing)
 1. `arb-types` — all shared types
 2. `sui-client` — RPC wrapper (object fetch, dry run, submit)
-3. `dex-cetus` — BCS deserialization of Cetus pools + ticks
-4. `dex-turbos` — BCS deserialization of Turbos pools + ticks
-5. `pool-manager` — discovery + initial state loading
-6. **Verify**: Fetch a real SUI/USDC pool from mainnet, deserialize, print state
+3. `dex/common` — `DexCommands` trait, shared DEX types
+4. `dex/cetus` — BCS deserialization of Cetus pools + ticks
+5. `dex/turbos` — BCS deserialization of Turbos pools + ticks
+6. `pool-manager` — discovery + initial state loading
+7. **Verify**: Fetch a real SUI/USDC pool from mainnet, deserialize, print state
 
 ### Phase 2: Math (simulate locally)
 7. `clmm-math` — port tick math + compute_swap_step from Cetus sources
