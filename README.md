@@ -72,15 +72,15 @@ High-performance Rust arbitrage bot for Sui DEX pools, targeting **Cetus** and *
 - [ ] `clmm-math` — port tick math + compute_swap_step from Cetus sources
 - [ ] Verify: compare local simulate_swap output against devInspectTransactionBlock
 
-### Phase 3: Execution (build and submit)
+### Phase 3: Strategy (find opportunities)
+- [ ] `arb-engine` — graph construction, cycle finding, binary search amount optimization
+- [ ] `bin/arb` — event-driven loop (swap event → path lookup → simulate → evaluate)
+- [ ] Verify: feed historical swap events, log detected opportunities with expected profit
+
+### Phase 4: Execution (build and submit)
 - [ ] `ptb-builder` — Cetus flash swap + Turbos swap commands
 - [ ] `gas-manager` — coin splitting + acquisition
 - [ ] Verify: build a real 2-hop PTB, dry-run on mainnet
-
-### Phase 4: Strategy (find opportunities)
-- [ ] `arb-engine` — graph construction, cycle finding, golden section search
-- [ ] `bin/arb` — event loop wiring, periodic scan
-- [ ] Verify: run in dry-run-only mode, log detected opportunities
 
 ### Phase 5: Shio (competitive execution)
 - [ ] `shio-client` — WebSocket feed + bid submission

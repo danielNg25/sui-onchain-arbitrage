@@ -186,11 +186,17 @@ pub struct PoolEdge {
 }
 ```
 
-### Cycle finding
-BFS from each whitelisted start token (SUI, USDC), max 2-3 hops. **Constraint: first leg must be a Cetus pool** (flash loan source). Generates candidate paths.
+### Event-driven trigger
+The engine is **purely event/transaction driven** — no periodic scanning. When a swap event arrives:
+1. Identify which pool was affected and which token pair changed
+2. Look up all arbitrage paths that include that pool
+3. Evaluate each path for profitability
 
-### Optimal amount: Golden Section Search
-Profit is unimodal (concave) for CLMM arbs — rises to peak, falls at deeper liquidity. Golden section converges in ~50 iterations, each calling `simulate_path` (microseconds with local math). Replaces fuzzland/sui-mev's 10-point grid search.
+### Cycle finding (precomputed at startup)
+BFS from each whitelisted start token (SUI, USDC), max 2-3 hops. **Constraint: first leg must be a Cetus pool** (flash loan source). Paths are precomputed and indexed by pool ID so event-driven lookup is O(1).
+
+### Optimal amount: Binary Search on Swap Amount
+When a swap event arrives with `amount_in`, the arb engine searches for the optimal input amount using **binary search over the range `[0, amount_in]`**. Each iteration calls `simulate_path` with local math (microseconds). The search finds the amount that maximizes `amount_out - amount_in - gas_cost`. Typically converges in ~20 iterations.
 
 ### Validation
 `devInspect` used only for:
@@ -236,15 +242,18 @@ Cmd N+2: shio::auctioneer::submit_bid(random_global_state, bid_amount, Result(N+
 ## Execution Pipeline
 
 ### Event Sources → `mpsc::channel<ArbTrigger>`
-1. **Shio feed** (`shio-client`): Primary. WebSocket to `wss://rpc.getshio.com/feed`. Parses `auctionStarted`, extracts mutated pools. Sub-300ms window.
+1. **Shio feed** (`shio-client`): Primary. WebSocket to `wss://rpc.getshio.com/feed`. Parses `auctionStarted`, extracts mutated pools + swap amounts. Sub-300ms window.
 2. **Event polling** (`sui-client`): `suix_queryEvents` with cursor. Filters Cetus + Turbos SwapEvents. 3-7s latency.
-3. **Periodic timer**: Every 10s, full state refresh + evaluation.
 
-### Flow per trigger
+No periodic scanning — the bot is **purely event/transaction driven**.
+
+### Flow per swap event
 ```
-Event arrives
-  → pool-manager.apply_update(event)
-  → arb-engine.evaluate(affected_pools) → Vec<Opportunity>
+Swap event arrives (pool_id, amount_in, amount_out, after_sqrt_price)
+  → pool-manager.apply_update(event)         // update local pool state
+  → arb-engine.find_paths(pool_id)           // lookup precomputed paths touching this pool
+  → for each path:
+      binary_search(0..amount_in, |amt| simulate_path(amt))  // find optimal amount
   → if profitable: ptb-builder.build(best_opportunity) → TransactionData
   → submission:
       ShioBackrun → match gas price, append bid, submit via shio-client
@@ -311,9 +320,8 @@ pre_split_amount = 1_000_000_000   # 1 SUI each
 [strategy]
 max_hops = 3
 min_profit_mist = 1_000_000   # 0.001 SUI
-gss_iterations = 50
+binary_search_iterations = 20
 poll_interval_ms = 3000
-refresh_interval_ms = 10000
 whitelisted_tokens = [
     "0x2::sui::SUI",
     "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
@@ -337,15 +345,15 @@ whitelisted_tokens = [
 7. `clmm-math` — port tick math + compute_swap_step from Cetus sources
 8. **Verify**: Compare local `simulate_swap` output against `devInspectTransactionBlock` for same pool + amount
 
-### Phase 3: Execution (build and submit)
-9. `ptb-builder` — Cetus flash swap + Turbos swap commands
-10. `gas-manager` — coin splitting + acquisition
-11. **Verify**: Build a real 2-hop PTB, dry-run it on mainnet
+### Phase 3: Strategy (find opportunities)
+9. `arb-engine` — graph construction, cycle finding, binary search amount optimization
+10. `bin/arb` — event-driven loop (swap event → path lookup → simulate → evaluate)
+11. **Verify**: Feed historical swap events, log detected opportunities with amounts and expected profit
 
-### Phase 4: Strategy (find opportunities)
-12. `arb-engine` — graph construction, cycle finding, golden section search
-13. `bin/arb` — event loop wiring, periodic scan
-14. **Verify**: Run in dry-run-only mode, log detected opportunities
+### Phase 4: Execution (build and submit)
+12. `ptb-builder` — Cetus flash swap + Turbos swap commands
+13. `gas-manager` — coin splitting + acquisition
+14. **Verify**: Build a real 2-hop PTB, dry-run it on mainnet
 
 ### Phase 5: Shio (competitive execution)
 15. `shio-client` — WebSocket feed + bid submission

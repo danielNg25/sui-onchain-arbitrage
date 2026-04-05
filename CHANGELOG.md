@@ -23,3 +23,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added testing requirements to commit rules: `cargo test --workspace` and `cargo clippy --workspace` must pass before every commit
 - Expanded Testing section in `CLAUDE.md` with test categories, what to test per crate, and test data strategy
 - Updated PR template with testing checklist items (`cargo test`, `cargo clippy`, unit/integration test checkboxes)
+- Swapped Phase 3 (Strategy) and Phase 4 (Execution) — find opportunities before building PTBs
+- Changed arb engine to event/tx-driven only — no periodic scanning
+- Replaced golden section search with binary search over `[0, swap_amount]` range from triggering event
