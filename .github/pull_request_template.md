@@ -21,12 +21,18 @@
 
 - [ ] README.md implementation progress updated
 - [ ] CHANGELOG.md updated under `[Unreleased]`
-- [ ] `cargo build` passes
-- [ ] `cargo test` passes (if applicable)
+- [ ] `cargo build --workspace` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `cargo clippy --workspace` passes with no warnings
 - [ ] No hardcoded package IDs or object addresses
 - [ ] No AI-related attribution in commits or code
 
 ## Test Plan
 
-<!-- How was this tested? -->
-- 
+<!-- How was this tested? Unit tests, integration tests, manual dry-run? -->
+- [ ] Unit tests added/updated for new logic
+- [ ] Integration tests added/updated (if touching on-chain interaction)
+- [ ] Manual verification (describe below)
+
+<!-- Describe any manual testing performed -->
+

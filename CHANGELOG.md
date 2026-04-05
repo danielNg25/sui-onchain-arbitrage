@@ -15,3 +15,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `docs/agent/ARCHITECTURE.md` — full technical design document
 - `docs/agent/RESEARCH.md` — Cetus/Turbos/Sui protocol research
 - `docs/agent/RESEARCH_2.md` — supplementary research findings
+
+### Changed
+- Reorganized DEX crates into `crates/dex/` subfolder (`dex/common`, `dex/cetus`, `dex/turbos`)
+- Added `dex-common` crate for shared `DexCommands` trait
+- Updated architecture diagram, dependency DAG, and implementation checklist to reflect new structure
+- Added testing requirements to commit rules: `cargo test --workspace` and `cargo clippy --workspace` must pass before every commit
+- Expanded Testing section in `CLAUDE.md` with test categories, what to test per crate, and test data strategy
+- Updated PR template with testing checklist items (`cargo test`, `cargo clippy`, unit/integration test checkboxes)
+- Swapped Phase 3 (Strategy) and Phase 4 (Execution) — find opportunities before building PTBs
+- Changed arb engine to event/tx-driven only — no periodic scanning
+- Replaced golden section search with binary search over `[0, swap_amount]` range from triggering event
+- Added mandatory phase planning requirement to `CLAUDE.md` — must create `docs/plans/phase<N>.md` and get approval before writing any code
