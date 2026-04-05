@@ -20,3 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reorganized DEX crates into `crates/dex/` subfolder (`dex/common`, `dex/cetus`, `dex/turbos`)
 - Added `dex-common` crate for shared `DexCommands` trait
 - Updated architecture diagram, dependency DAG, and implementation checklist to reflect new structure
+- Added testing requirements to commit rules: `cargo test --workspace` and `cargo clippy --workspace` must pass before every commit
+- Expanded Testing section in `CLAUDE.md` with test categories, what to test per crate, and test data strategy
+- Updated PR template with testing checklist items (`cargo test`, `cargo clippy`, unit/integration test checkboxes)
