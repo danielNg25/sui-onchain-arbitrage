@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arb_types::config::AppConfig;
 use arb_types::pool::object_id_from_hex;
 use dex_common::DexRegistry;
-use sui_client::{EventFilter, ObjectDataOptions, SuiClient};
+use sui_client::{ObjectDataOptions, SuiClient};
 
 fn make_client() -> Arc<SuiClient> {
     Arc::new(SuiClient::new("https://fullnode.mainnet.sui.io:443"))
@@ -70,33 +70,8 @@ async fn verify_turbos_ticks() {
     let config = AppConfig::load("../../config/mainnet.toml").unwrap();
     let client = make_client();
 
-    // Find a Turbos pool with activity by querying recent swap events
-    let events = client
-        .query_events(
-            EventFilter::MoveEventType(
-                "0x91bfbc386a41afcfd9b2533058d7e915a1d3829089cc268ff4333d54d6339ca1::pool::SwapEvent".to_string(),
-            ),
-            None,
-            Some(5),
-            true, // most recent
-        )
-        .await
-        .expect("query Turbos SwapEvent failed");
-
-    println!("Recent Turbos swap events: {}", events.data.len());
-
-    let mut turbos_pool_id = None;
-    for event in &events.data {
-        if let Some(json) = &event.parsed_json {
-            if let Some(pool_str) = json["pool"].as_str() {
-                println!("  Turbos pool with recent swap: {}", pool_str);
-                turbos_pool_id = Some(pool_str.to_string());
-                break;
-            }
-        }
-    }
-
-    let pool_id_str = turbos_pool_id.expect("no Turbos pool found with recent swaps");
+    // Turbos DEEP/USDC pool — known to have I32-keyed tick dynamic fields
+    let pool_id_str = "0x198af6ff81028c6577e94465d534c4e2cfcbbab06a95724ece7011c55a9d1f5a".to_string();
     println!("\nUsing Turbos pool: {}", pool_id_str);
 
     let registry = dex_turbos::TurbosRegistry::new(&config.turbos);
@@ -127,10 +102,12 @@ async fn verify_turbos_ticks() {
     }
 
     if let Some(first) = ticks.first() {
-        println!("  First: index={}", first.index);
+        println!("  First: index={}, liq_net={}, liq_gross={}",
+            first.index, first.liquidity_net, first.liquidity_gross);
     }
     if let Some(last) = ticks.last() {
-        println!("  Last:  index={}", last.index);
+        println!("  Last:  index={}, liq_net={}, liq_gross={}",
+            last.index, last.liquidity_net, last.liquidity_gross);
     }
 
     // Verify sorted
@@ -138,8 +115,20 @@ async fn verify_turbos_ticks() {
         assert!(w[0].index < w[1].index, "ticks must be sorted by index");
     }
 
-    // Turbos ticks from bitmap only have indices (liquidity_net/gross are 0 until Phase 2)
-    println!("  Note: liquidity data populated via devInspect in Phase 2");
+    // Check if liquidity data is populated
+    let has_liquidity = ticks.iter().any(|t| t.liquidity_gross > 0);
+    println!("  Has liquidity data: {}", has_liquidity);
+    assert!(has_liquidity, "at least some ticks should have liquidity data");
+
+    // Verify liquidity_net sums to ~0
+    let net_sum: i128 = ticks.iter().map(|t| t.liquidity_net).sum();
+    println!("  Sum of liquidity_net: {}", net_sum);
+    assert!(
+        net_sum.unsigned_abs() < 1_000_000,
+        "liquidity_net should sum to ~0, got {}",
+        net_sum
+    );
+
     println!("  ALL CHECKS PASSED");
 }
 

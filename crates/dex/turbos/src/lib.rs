@@ -73,7 +73,7 @@ impl Pool for TurbosPool {
 
     async fn fetch_price_data(&self, client: &SuiClient) -> Result<(), ArbError> {
         let ticks_table_id = self.state.read().unwrap().ticks_table_id;
-        let new_ticks = ticks::fetch_turbos_ticks(client, &ticks_table_id, &self.id).await?;
+        let new_ticks = ticks::fetch_turbos_ticks(client, &self.id, &ticks_table_id).await?;
         *self.ticks.write().unwrap() = new_ticks;
         Ok(())
     }
@@ -141,7 +141,7 @@ pub async fn fetch_ticks_for_pool(
         ArbError::PoolNotFound(arb_types::pool::object_id_to_hex(pool_id))
     })?;
     let ticks_table_id = pool.state.read().unwrap().ticks_table_id;
-    ticks::fetch_turbos_ticks(client, &ticks_table_id, pool_id).await
+    ticks::fetch_turbos_ticks(client, pool_id, &ticks_table_id).await
 }
 
 /// Turbos pool creation event type — used for pool discovery.
