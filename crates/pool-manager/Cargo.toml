@@ -6,12 +6,15 @@ edition = "2021"
 [dependencies]
 arb-types = { workspace = true }
 dex-common = { workspace = true }
-dex-cetus = { workspace = true }
-dex-turbos = { workspace = true }
 sui-client = { workspace = true }
 dashmap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+dex-cetus = { workspace = true }
+dex-turbos = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }

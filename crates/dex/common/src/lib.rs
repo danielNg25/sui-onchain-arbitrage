@@ -1,36 +1,115 @@
-use arb_types::error::ArbError;
-use arb_types::event::SwapEventData;
-use arb_types::pool::{ObjectId, PoolState};
-use arb_types::tick::Tick;
+use std::collections::HashSet;
+use std::sync::Arc;
 
-/// Deserialize raw BCS bytes into a normalized PoolState.
-pub trait PoolDeserializer {
-    /// `type_params` are the Move type parameters extracted from the object's type string.
-    fn deserialize_pool(
+use arb_types::error::ArbError;
+use arb_types::event::SwapEstimate;
+use arb_types::pool::{CoinType, Dex, ObjectId};
+
+// ---------------------------------------------------------------------------
+// DexRegistry — DEX-level operations (discovery, pool lookup)
+// ---------------------------------------------------------------------------
+
+/// A DEX registry manages pool discovery and provides pool handles.
+/// Each DEX implementation owns its internal pool state.
+#[async_trait::async_trait]
+pub trait DexRegistry: Send + Sync {
+    /// Which DEX this registry is for.
+    fn dex(&self) -> Dex;
+
+    /// On-chain event type strings this DEX emits (for routing).
+    fn event_types(&self) -> &[&str];
+
+    /// Check if a Move type string belongs to this DEX's pools.
+    fn matches_pool_type(&self, type_string: &str) -> bool;
+
+    /// Discover all pools from on-chain registries.
+    /// Ingests them internally and returns pool IDs + coin pairs.
+    async fn discover_pools(
+        &self,
+        client: &sui_client::SuiClient,
+        whitelisted_tokens: &HashSet<String>,
+    ) -> Result<Vec<(ObjectId, CoinType, CoinType)>, ArbError>;
+
+    /// Ingest a single pool object (BCS bytes from RPC).
+    /// Returns the pool ID and coin pair if successfully ingested.
+    fn ingest_pool_object(
+        &self,
         object_id: ObjectId,
         bcs_bytes: &[u8],
         type_params: &[String],
         object_version: u64,
         initial_shared_version: u64,
-    ) -> Result<PoolState, ArbError>;
+    ) -> Result<Option<(ObjectId, CoinType, CoinType)>, ArbError>;
+
+    /// Get a pool handle for pool-level operations.
+    fn pool(&self, pool_id: &ObjectId) -> Option<Arc<dyn Pool>>;
+
+    /// Get all pool IDs managed by this registry.
+    fn pool_ids(&self) -> Vec<ObjectId>;
+
+    /// Get pools containing a specific token.
+    fn pools_for_token(&self, token: &CoinType) -> Vec<ObjectId>;
+
+    /// Number of pools managed.
+    fn pool_count(&self) -> usize;
 }
 
-/// Fetch initialized ticks for a pool from on-chain dynamic fields.
+// ---------------------------------------------------------------------------
+// Pool — Pool-level operations (state, events, swap estimation)
+// ---------------------------------------------------------------------------
+
+/// A single pool instance. Each DEX implements this with its own internal state.
+/// Upstream code interacts through this trait without knowing the DEX-specific details.
 #[async_trait::async_trait]
-pub trait TickFetcher {
-    async fn fetch_ticks(
-        client: &sui_client::SuiClient,
-        pool: &PoolState,
-    ) -> Result<Vec<Tick>, ArbError>;
-}
+pub trait Pool: Send + Sync {
+    /// Pool's on-chain object ID.
+    fn id(&self) -> ObjectId;
 
-/// Parse swap event from JSON into SwapEventData.
-pub trait SwapEventParser {
-    fn parse_swap_event(
+    /// Which DEX this pool belongs to.
+    fn dex(&self) -> Dex;
+
+    /// The tokens this pool trades.
+    fn coins(&self) -> Vec<CoinType>;
+
+    /// Whether this pool is active/tradeable.
+    fn is_active(&self) -> bool;
+
+    /// Fee rate in PPM (denominator 1_000_000).
+    fn fee_rate(&self) -> u64;
+
+    /// Fetch tick/level data from chain and store internally.
+    async fn fetch_price_data(
+        &self,
+        client: &sui_client::SuiClient,
+    ) -> Result<(), ArbError>;
+
+    /// Apply a raw on-chain event to update internal state.
+    ///
+    /// Each pool decodes events in its own format (swap, add/remove liquidity,
+    /// order fills, etc). The caller doesn't know or care about internals.
+    ///
+    /// Returns:
+    /// - `Ok(None)` — event not relevant to this pool
+    /// - `Ok(Some(false))` — applied, price data still valid
+    /// - `Ok(Some(true))` — applied, price data needs re-fetching
+    fn apply_event(
+        &self,
         event_type: &str,
         parsed_json: &serde_json::Value,
-    ) -> Result<Option<SwapEventData>, ArbError>;
+    ) -> Result<Option<bool>, ArbError>;
+
+    /// Estimate swap output using internal state. Pure local computation.
+    /// `token_in` specifies direction — caller doesn't need to know internal ordering.
+    fn estimate_swap(
+        &self,
+        token_in: &CoinType,
+        amount_in: u64,
+    ) -> Result<SwapEstimate, ArbError>;
 }
+
+// ---------------------------------------------------------------------------
+// Helper functions (shared across DEX implementations)
+// ---------------------------------------------------------------------------
 
 /// Parse Move type string into type parameters.
 ///
@@ -48,7 +127,6 @@ pub fn parse_type_params(type_string: &str) -> Vec<String> {
     }
     let inner = &type_string[start + 1..end];
 
-    // Split by ", " but handle nested generics by tracking angle bracket depth
     let mut params = Vec::new();
     let mut depth = 0;
     let mut current = String::new();
@@ -82,8 +160,6 @@ pub fn is_fee_type(type_param: &str) -> bool {
 }
 
 /// Parse type params, separating coin types from fee type (for Turbos 3-param pools).
-///
-/// Returns (coin_type_params, optional_fee_type).
 pub fn parse_type_params_with_fee(type_string: &str) -> (Vec<String>, Option<String>) {
     let all_params = parse_type_params(type_string);
     let mut coin_params = Vec::new();
@@ -97,6 +173,9 @@ pub fn parse_type_params_with_fee(type_string: &str) -> (Vec<String>, Option<Str
     }
     (coin_params, fee_type)
 }
+
+// Re-export Tick for convenience (shared by CLMM implementations)
+pub use arb_types::tick::Tick;
 
 #[cfg(test)]
 mod tests {

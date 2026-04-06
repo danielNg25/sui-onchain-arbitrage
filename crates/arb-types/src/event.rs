@@ -1,6 +1,7 @@
-use crate::pool::{Dex, ObjectId};
+use crate::pool::{CoinType, Dex, ObjectId};
 
 /// Parsed swap event data, shared across DEX implementations.
+/// Used by arb-engine to identify which pool changed and trigger path evaluation.
 #[derive(Debug, Clone)]
 pub struct SwapEventData {
     pub pool_id: ObjectId,
@@ -16,4 +17,14 @@ pub struct SwapEventData {
     pub vault_b_amount: u64,
     /// Number of tick crossings. If > 1, ticks need refresh.
     pub steps: u64,
+}
+
+/// Result of a local swap estimation.
+#[derive(Debug, Clone)]
+pub struct SwapEstimate {
+    pub token_in: CoinType,
+    pub token_out: CoinType,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub fee_amount: u64,
 }

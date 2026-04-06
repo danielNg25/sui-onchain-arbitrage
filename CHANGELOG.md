@@ -7,12 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- `arb-types` crate: shared types (PoolState, Tick, CoinType, SwapEventData, AppConfig), hex helpers, config loading from TOML
+- `arb-types` crate: shared types (Tick, CoinType, ObjectId, Dex, SwapEventData, SwapEstimate, AppConfig), hex helpers, config loading from TOML
 - `sui-client` crate: thin JSON-RPC wrapper using reqwest (get_object, multi_get_objects, get_dynamic_fields, query_events, dev_inspect, execute_tx, checkpoint queries)
-- `dex-common` crate: PoolDeserializer and TickFetcher traits, SwapEventParser trait, type string parsing for Cetus 2-param and Turbos 3-param pools
-- `dex-cetus` crate: manual BCS deserialization of Cetus Pool objects, SkipList tick node deserialization, swap event parsing
-- `dex-turbos` crate: BCS deserialization structs for Turbos Pool objects, tick fetching, swap event parsing
-- `pool-manager` crate: pool discovery from Cetus/Turbos registries, DashMap-based pool cache with token/pair indexes, atomic checkpoint snapshots for event sync, pool state updates from swap events
+- `dex-common` crate: `DexRegistry` and `Pool` traits for DEX-agnostic pool management (supports CLMM, V2 AMM, orderbook), type string parsing
+- `dex-cetus` crate: `CetusRegistry` + `CetusPool` implementing unified traits, manual BCS deserialization, SkipList tick fetching, event-based pool discovery via CreatePoolEvent, swap event application
+- `dex-turbos` crate: `TurbosRegistry` + `TurbosPool` implementing unified traits, BCS deserialization, tick fetching, event-based discovery via PoolCreatedEvent
+- `pool-manager` crate: thin router over `DexRegistry` trait objects, global pair/token indexes, atomic checkpoint snapshots, event routing
 - `config/mainnet.toml`: all Cetus/Turbos/Shio package IDs, shared objects, gas/strategy config
 - Workspace Cargo.toml with shared dependency versions
 - `docs/plans/phase1-foundation.md`: detailed implementation plan

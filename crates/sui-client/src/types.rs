@@ -173,7 +173,6 @@ pub struct SuiEvent {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type", content = "value")]
 pub enum EventFilter {
     MoveEventType(String),
     MoveModule {
