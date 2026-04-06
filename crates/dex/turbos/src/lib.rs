@@ -126,6 +126,24 @@ impl Pool for TurbosPool {
 // TurbosRegistry
 // ---------------------------------------------------------------------------
 
+/// Get ticks table ID for a pool (for testing/verification).
+pub fn get_ticks_table_id(registry: &TurbosRegistry, pool_id: &[u8; 32]) -> Option<[u8; 32]> {
+    registry.pools.get(pool_id).map(|p| p.state.read().unwrap().ticks_table_id)
+}
+
+/// Fetch ticks for a pool (for testing/verification).
+pub async fn fetch_ticks_for_pool(
+    client: &SuiClient,
+    registry: &TurbosRegistry,
+    pool_id: &[u8; 32],
+) -> Result<Vec<Tick>, ArbError> {
+    let pool = registry.pools.get(pool_id).ok_or_else(|| {
+        ArbError::PoolNotFound(arb_types::pool::object_id_to_hex(pool_id))
+    })?;
+    let ticks_table_id = pool.state.read().unwrap().ticks_table_id;
+    ticks::fetch_turbos_ticks(client, &ticks_table_id, pool_id).await
+}
+
 /// Turbos pool creation event type — used for pool discovery.
 pub const TURBOS_CREATE_POOL_EVENT_TYPE: &str =
     "0x91bfbc386a41afcfd9b2533058d7e915a1d3829089cc268ff4333d54d6339ca1::pool_factory::PoolCreatedEvent";

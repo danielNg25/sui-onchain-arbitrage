@@ -350,6 +350,19 @@ impl DexRegistry for CetusRegistry {
     }
 }
 
+/// Fetch ticks for a pool (for testing/verification).
+pub async fn fetch_ticks_for_pool(
+    client: &SuiClient,
+    registry: &CetusRegistry,
+    pool_id: &ObjectId,
+) -> Result<Vec<Tick>, ArbError> {
+    let pool = registry.pools.get(pool_id).ok_or_else(|| {
+        ArbError::PoolNotFound(arb_types::pool::object_id_to_hex(pool_id))
+    })?;
+    let ticks_table_id = pool.state.read().unwrap().ticks_table_id;
+    ticks::fetch_cetus_ticks(client, &ticks_table_id, pool_id).await
+}
+
 /// Check if a Cetus pool is paused from JSON content.
 pub fn is_pool_paused(content: &serde_json::Value) -> bool {
     content
