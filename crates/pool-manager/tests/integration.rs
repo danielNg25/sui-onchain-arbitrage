@@ -165,6 +165,57 @@ async fn ingest_and_query_cetus_pool() {
 
 #[tokio::test]
 #[ignore] // requires network
+async fn ingest_and_query_turbos_pool() {
+    let config = AppConfig::load("../../config/mainnet.toml").expect("config load failed");
+    let client = make_client();
+    let registry = dex_turbos::TurbosRegistry::new(&config.turbos);
+
+    // Known Turbos pool from PoolCreatedEvent
+    let pool_id_str = "0x55bb4387bfe2447b4989abcf86a448d17ed794a8956df7871862f53324778d0e";
+    let resp = client
+        .get_object(pool_id_str, sui_client::ObjectDataOptions::bcs())
+        .await
+        .unwrap();
+
+    let data = resp.data.unwrap();
+    let bcs_bytes = data.bcs_bytes().unwrap();
+    let type_str = data.bcs_type().unwrap();
+    let (coin_params, fee_type) = dex_common::parse_type_params_with_fee(type_str);
+    let mut type_params = coin_params;
+    if let Some(ft) = fee_type {
+        type_params.push(ft);
+    }
+    let object_id = arb_types::pool::object_id_from_hex(pool_id_str).unwrap();
+
+    let result = registry
+        .ingest_pool_object(
+            object_id,
+            &bcs_bytes,
+            &type_params,
+            data.version_number(),
+            data.initial_shared_version().unwrap_or(0),
+        )
+        .unwrap();
+
+    assert!(result.is_some());
+    let (id, coin_a, coin_b) = result.unwrap();
+
+    println!("\n=== Ingested Turbos Pool ===");
+    println!("  id:     {}", arb_types::pool::object_id_to_hex(&id));
+    println!("  coin_a: {}", coin_a);
+    println!("  coin_b: {}", coin_b);
+
+    let pool = registry.pool(&id).expect("pool should exist");
+    println!("  dex:    {:?}", pool.dex());
+    println!("  active: {}", pool.is_active());
+    println!("  fee:    {} PPM", pool.fee_rate());
+
+    assert!(pool.is_active());
+    assert_eq!(pool.dex(), arb_types::pool::Dex::Turbos);
+}
+
+#[tokio::test]
+#[ignore] // requires network
 async fn fetch_checkpoint_number() {
     let client = make_client();
     let checkpoint = client

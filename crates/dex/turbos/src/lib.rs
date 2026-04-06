@@ -299,9 +299,7 @@ impl DexRegistry for TurbosRegistry {
             )));
         }
 
-        let raw: raw::TurbosPoolRaw = bcs::from_bytes(bcs_bytes).map_err(|e| {
-            ArbError::BcsDeserialize(format!("Turbos pool deser failed: {}", e))
-        })?;
+        let raw = raw::parse_turbos_pool(bcs_bytes)?;
 
         if !raw.unlocked {
             return Ok(None);
@@ -320,14 +318,14 @@ impl DexRegistry for TurbosRegistry {
             coin_b: coin_b.clone(),
             state: RwLock::new(TurbosPoolState {
                 sqrt_price: raw.sqrt_price,
-                tick_current: raw.tick_current_index.to_i32(),
+                tick_current: raw.tick_current_index,
                 liquidity: raw.liquidity,
                 fee_rate: raw.fee as u64,
                 tick_spacing: raw.tick_spacing,
                 reserve_a: raw.coin_a,
                 reserve_b: raw.coin_b,
                 is_active: raw.unlocked,
-                ticks_table_id: raw.tick_map,
+                ticks_table_id: raw.tick_map_id,
                 fee_type,
                 initial_shared_version,
                 object_version,
