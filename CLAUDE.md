@@ -66,6 +66,14 @@ Before starting work on any implementation phase, you **must** create a detailed
 - **Update CHANGELOG.md**: Every commit must add an entry to `CHANGELOG.md` under the `[Unreleased]` section. Use the appropriate subsection: `Added`, `Changed`, `Fixed`, `Removed`.
 - **Run tests before committing**: Always run `cargo test --workspace` and `cargo clippy --workspace` before creating a commit. Fix any failures or warnings before committing. Do not skip or ignore test failures.
 
+## Quality Standards
+
+- **Test ALL implementations, not just one**: When building a feature that applies to multiple DEXes (or any set of similar implementations), test and validate EVERY implementation against mainnet before considering the work done. Do not test only Cetus and assume Turbos works — each DEX has different on-chain formats, field names, and storage layouts.
+- **Validate with real on-chain data**: Unit tests with mocks are not enough. Every BCS deserialization, event parser, and state mutation must be verified against real mainnet data. Use integration tests with `#[ignore]` for network-dependent tests.
+- **End-to-end verification**: For state management code (event application, pool state sync), write E2E tests that compare locally-computed state against on-chain state. This means: fetch state at version A, apply events, fetch state at version B, compare field-by-field (including individual tick liquidity data).
+- **Never propose a PR until all implementations are tested**: Do not ask to merge or create a PR until every implementation path has been validated. If the feature touches Cetus and Turbos, both must have passing integration tests.
+- **Fix what you find**: If testing reveals a bug (e.g., wrong field names in Turbos SwapEvent), fix it immediately and re-test. Don't skip or paper over issues.
+
 ## Code Conventions
 
 - **Rust edition**: 2021

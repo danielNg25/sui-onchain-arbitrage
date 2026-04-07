@@ -60,13 +60,13 @@ High-performance Rust arbitrage bot for Sui DEX pools, targeting **Cetus** and *
 ## Implementation Progress
 
 ### Phase 1: Foundation (data flowing)
-- [ ] `arb-types` — shared types crate
-- [ ] `sui-client` — RPC wrapper (object fetch, dry run, submit)
-- [ ] `dex/common` — DexCommands trait, shared DEX types
-- [ ] `dex/cetus` — BCS deserialization of Cetus pools + ticks
-- [ ] `dex/turbos` — BCS deserialization of Turbos pools + ticks
-- [ ] `pool-manager` — pool discovery + initial state loading
-- [ ] Verify: fetch real SUI/USDC pool from mainnet, deserialize, print state
+- [x] `arb-types` — shared types crate
+- [x] `sui-client` — RPC wrapper (object fetch, dry run, submit)
+- [x] `dex/common` — DexCommands trait, shared DEX types
+- [x] `dex/cetus` — BCS deserialization of Cetus pools + ticks
+- [x] `dex/turbos` — BCS deserialization of Turbos pools + ticks
+- [x] `pool-manager` — pool discovery + initial state loading
+- [x] Verify: fetch real SUI/USDC pool from mainnet, deserialize, print state
 
 ### Phase 2: Math (simulate locally)
 - [ ] `clmm-math` — port tick math + compute_swap_step from Cetus sources

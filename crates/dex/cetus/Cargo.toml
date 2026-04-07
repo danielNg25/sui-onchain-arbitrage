@@ -1,0 +1,16 @@
+[package]
+name = "dex-cetus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arb-types = { workspace = true }
+dex-common = { workspace = true }
+sui-client = { workspace = true }
+bcs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+dashmap = { workspace = true }
