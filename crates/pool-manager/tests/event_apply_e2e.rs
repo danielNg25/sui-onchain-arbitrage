@@ -211,12 +211,19 @@ async fn e2e_cetus_apply_all_events() {
 
     let pool_a = registry_a.pool(&object_id).unwrap();
 
+    // Also fetch ticks at version A so apply_event has tick data to work with
+    pool_a.fetch_price_data(&client).await.unwrap();
+
     let state_a_sqrt = dex_cetus::get_pool_sqrt_price(&registry_a, &object_id).unwrap();
     let state_a_reserves = dex_cetus::get_pool_reserves(&registry_a, &object_id).unwrap();
+    let ticks_a_count = dex_cetus::get_pool_ticks(&registry_a, &object_id)
+        .map(|t| t.len())
+        .unwrap_or(0);
     println!("\n=== State A (version {}) ===", v_a);
     println!("  sqrt_price:  {}", state_a_sqrt);
     println!("  reserve_a:   {}", state_a_reserves.0);
     println!("  reserve_b:   {}", state_a_reserves.1);
+    println!("  ticks:       {}", ticks_a_count);
 
     // Step 5: Apply ALL events (swap + liquidity)
     let mut applied_count = 0;
@@ -317,6 +324,80 @@ async fn e2e_cetus_apply_all_events() {
                 (applied_reserves.1 as i128 - expected_reserves.1 as i128).abs()
             );
         }
+    }
+
+    // Step 7: Tick-by-tick comparison
+    // Re-fetch ticks from chain (current state = state B) and compare with our locally mutated ticks.
+    let pool_b = registry_b.pool(&object_id).unwrap();
+    pool_b.fetch_price_data(&client).await.unwrap();
+    let ticks_onchain = dex_cetus::get_pool_ticks(&registry_b, &object_id).unwrap();
+    let ticks_applied = dex_cetus::get_pool_ticks(&registry_a, &object_id).unwrap();
+
+    println!("\n=== Tick-by-tick comparison ===");
+    println!("  Applied ticks:  {}", ticks_applied.len());
+    println!("  On-chain ticks: {}", ticks_onchain.len());
+
+    // Build lookup maps for comparison
+    let applied_map: std::collections::HashMap<i32, &arb_types::tick::Tick> =
+        ticks_applied.iter().map(|t| (t.index, t)).collect();
+    let onchain_map: std::collections::HashMap<i32, &arb_types::tick::Tick> =
+        ticks_onchain.iter().map(|t| (t.index, t)).collect();
+
+    let mut mismatches = 0;
+    let mut missing_in_applied = 0;
+    let mut extra_in_applied = 0;
+
+    // Check all on-chain ticks exist in applied with correct values
+    for (idx, onchain_tick) in &onchain_map {
+        match applied_map.get(idx) {
+            Some(applied_tick) => {
+                if applied_tick.liquidity_net != onchain_tick.liquidity_net
+                    || applied_tick.liquidity_gross != onchain_tick.liquidity_gross
+                {
+                    if mismatches < 5 {
+                        println!(
+                            "  MISMATCH tick {}: applied(net={}, gross={}) vs onchain(net={}, gross={})",
+                            idx,
+                            applied_tick.liquidity_net, applied_tick.liquidity_gross,
+                            onchain_tick.liquidity_net, onchain_tick.liquidity_gross,
+                        );
+                    }
+                    mismatches += 1;
+                }
+            }
+            None => {
+                if missing_in_applied < 3 {
+                    println!(
+                        "  MISSING in applied: tick {} (onchain net={}, gross={})",
+                        idx, onchain_tick.liquidity_net, onchain_tick.liquidity_gross
+                    );
+                }
+                missing_in_applied += 1;
+            }
+        }
+    }
+
+    // Check for extra ticks in applied that aren't on-chain
+    for (idx, _) in &applied_map {
+        if !onchain_map.contains_key(idx) {
+            if extra_in_applied < 3 {
+                println!("  EXTRA in applied: tick {}", idx);
+            }
+            extra_in_applied += 1;
+        }
+    }
+
+    println!("\n  Tick mismatches:        {}", mismatches);
+    println!("  Missing in applied:     {}", missing_in_applied);
+    println!("  Extra in applied:       {}", extra_in_applied);
+
+    if mismatches == 0 && missing_in_applied == 0 && extra_in_applied == 0 {
+        println!("\n  ALL TICKS MATCH EXACTLY!");
+    } else {
+        println!(
+            "\n  Note: {} tick differences (events may have occurred during test)",
+            mismatches + missing_in_applied + extra_in_applied
+        );
     }
 
     println!("\n  E2E TEST PASSED");

@@ -168,6 +168,8 @@ impl TurbosPool {
         let tick_lower = events::parse_i32_field(json, "tick_lower_index")?;
         let tick_upper = events::parse_i32_field(json, "tick_upper_index")?;
         let liquidity_delta = events::parse_u128_field(json, "liquidity_delta")?;
+        let amount_a = events::parse_u64_field(json, "amount_a")?;
+        let amount_b = events::parse_u64_field(json, "amount_b")?;
 
         let mut state = self.state.write().unwrap();
 
@@ -179,6 +181,15 @@ impl TurbosPool {
             } else {
                 state.liquidity = state.liquidity.saturating_sub(liquidity_delta);
             }
+        }
+
+        // Update reserves
+        if is_add {
+            state.reserve_a += amount_a;
+            state.reserve_b += amount_b;
+        } else {
+            state.reserve_a = state.reserve_a.saturating_sub(amount_a);
+            state.reserve_b = state.reserve_b.saturating_sub(amount_b);
         }
 
         // Update tick data

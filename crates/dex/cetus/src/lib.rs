@@ -173,9 +173,20 @@ impl CetusPool {
         let tick_upper = events::parse_i32_field(json, "tick_upper")?;
         let liquidity_delta = events::parse_u128_field(json, "liquidity")?;
         let after_liquidity = events::parse_u128_field(json, "after_liquidity")?;
+        let amount_a = events::parse_u64_field(json, "amount_a")?;
+        let amount_b = events::parse_u64_field(json, "amount_b")?;
 
         let mut state = self.state.write().unwrap();
         state.liquidity = after_liquidity;
+
+        // Update reserves
+        if is_add {
+            state.reserve_a += amount_a;
+            state.reserve_b += amount_b;
+        } else {
+            state.reserve_a = state.reserve_a.saturating_sub(amount_a);
+            state.reserve_b = state.reserve_b.saturating_sub(amount_b);
+        }
 
         let mut ticks = self.ticks.write().unwrap();
         let signed_delta = if is_add {
@@ -416,6 +427,14 @@ pub fn get_pool_sqrt_price(registry: &CetusRegistry, pool_id: &ObjectId) -> Opti
         .pools
         .get(pool_id)
         .map(|p| p.state.read().unwrap().sqrt_price)
+}
+
+/// Get the internal ticks snapshot for a pool (for testing/verification).
+pub fn get_pool_ticks(registry: &CetusRegistry, pool_id: &ObjectId) -> Option<Vec<Tick>> {
+    registry
+        .pools
+        .get(pool_id)
+        .map(|p| p.ticks.read().unwrap().clone())
 }
 
 /// Get reserve_a and reserve_b for a pool (for testing/verification).
