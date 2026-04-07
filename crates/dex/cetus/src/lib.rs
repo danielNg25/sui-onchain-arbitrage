@@ -23,7 +23,17 @@ pub const CETUS_SWAP_EVENT_TYPE: &str =
 pub const CETUS_CREATE_POOL_EVENT_TYPE: &str =
     "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::factory::CreatePoolEvent";
 
-const CETUS_EVENT_TYPES: &[&str] = &[CETUS_SWAP_EVENT_TYPE];
+pub const CETUS_ADD_LIQUIDITY_EVENT_TYPE: &str =
+    "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::pool::AddLiquidityEvent";
+
+pub const CETUS_REMOVE_LIQUIDITY_EVENT_TYPE: &str =
+    "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::pool::RemoveLiquidityEvent";
+
+const CETUS_EVENT_TYPES: &[&str] = &[
+    CETUS_SWAP_EVENT_TYPE,
+    CETUS_ADD_LIQUIDITY_EVENT_TYPE,
+    CETUS_REMOVE_LIQUIDITY_EVENT_TYPE,
+];
 
 // ---------------------------------------------------------------------------
 // CetusPool — internal CLMM state, implements Pool trait
@@ -87,11 +97,7 @@ impl Pool for CetusPool {
         event_type: &str,
         parsed_json: &serde_json::Value,
     ) -> Result<Option<bool>, ArbError> {
-        if event_type != CETUS_SWAP_EVENT_TYPE {
-            return Ok(None);
-        }
-
-        // Check if this event is for our pool
+        // Check if event is for our pool
         let pool_id_str = match parsed_json["pool"].as_str() {
             Some(s) => s,
             None => return Ok(None),
@@ -101,20 +107,12 @@ impl Pool for CetusPool {
             return Ok(None);
         }
 
-        let after_sqrt_price = events::parse_u128_field(parsed_json, "after_sqrt_price")?;
-        let vault_a = events::parse_u64_field(parsed_json, "vault_a_amount")?;
-        let vault_b = events::parse_u64_field(parsed_json, "vault_b_amount")?;
-        let steps = events::parse_u64_field(parsed_json, "steps")?;
-
-        {
-            let mut state = self.state.write().unwrap();
-            state.sqrt_price = after_sqrt_price;
-            state.reserve_a = vault_a;
-            state.reserve_b = vault_b;
+        match event_type {
+            CETUS_SWAP_EVENT_TYPE => self.apply_swap_event(parsed_json),
+            CETUS_ADD_LIQUIDITY_EVENT_TYPE => self.apply_liquidity_event(parsed_json, true),
+            CETUS_REMOVE_LIQUIDITY_EVENT_TYPE => self.apply_liquidity_event(parsed_json, false),
+            _ => Ok(None),
         }
-
-        // If multiple ticks crossed, price data needs refresh
-        Ok(Some(steps > 1))
     }
 
     fn estimate_swap(
@@ -122,10 +120,72 @@ impl Pool for CetusPool {
         _token_in: &CoinType,
         _amount_in: u64,
     ) -> Result<SwapEstimate, ArbError> {
-        // Placeholder — requires clmm-math (Phase 2)
         Err(ArbError::InvalidData(
             "swap estimation requires clmm-math (Phase 2)".into(),
         ))
+    }
+}
+
+impl CetusPool {
+    fn apply_swap_event(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<Option<bool>, ArbError> {
+        let after_sqrt_price = events::parse_u128_field(json, "after_sqrt_price")?;
+        let before_sqrt_price = events::parse_u128_field(json, "before_sqrt_price")?;
+        let vault_a = events::parse_u64_field(json, "vault_a_amount")?;
+        let vault_b = events::parse_u64_field(json, "vault_b_amount")?;
+        let steps = events::parse_u64_field(json, "steps")?;
+        let a_to_b = json["atob"].as_bool().unwrap_or(true);
+
+        let mut state = self.state.write().unwrap();
+        state.sqrt_price = after_sqrt_price;
+        state.reserve_a = vault_a;
+        state.reserve_b = vault_b;
+
+        // Update tick_current and liquidity by walking crossed ticks
+        if steps > 1 {
+            let ticks = self.ticks.read().unwrap();
+            let (new_tick, new_liquidity) = walk_crossed_ticks(
+                &ticks,
+                state.liquidity,
+                before_sqrt_price,
+                after_sqrt_price,
+                a_to_b,
+            );
+            state.tick_current = new_tick;
+            state.liquidity = new_liquidity;
+        } else {
+            // Single step — find tick for after_sqrt_price
+            let ticks = self.ticks.read().unwrap();
+            state.tick_current = find_tick_for_sqrt_price(&ticks, after_sqrt_price);
+        }
+
+        Ok(Some(steps > 1))
+    }
+
+    fn apply_liquidity_event(
+        &self,
+        json: &serde_json::Value,
+        is_add: bool,
+    ) -> Result<Option<bool>, ArbError> {
+        let tick_lower = events::parse_i32_field(json, "tick_lower")?;
+        let tick_upper = events::parse_i32_field(json, "tick_upper")?;
+        let liquidity_delta = events::parse_u128_field(json, "liquidity")?;
+        let after_liquidity = events::parse_u128_field(json, "after_liquidity")?;
+
+        let mut state = self.state.write().unwrap();
+        state.liquidity = after_liquidity;
+
+        let mut ticks = self.ticks.write().unwrap();
+        let signed_delta = if is_add {
+            liquidity_delta as i128
+        } else {
+            -(liquidity_delta as i128)
+        };
+        apply_liquidity_to_ticks(&mut ticks, tick_lower, tick_upper, signed_delta);
+
+        Ok(Some(false))
     }
 }
 
@@ -370,5 +430,199 @@ pub fn is_pool_paused(content: &serde_json::Value) -> bool {
         .and_then(|f| f.get("is_pause"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Tick helpers for event application
+// ---------------------------------------------------------------------------
+
+/// Find the tick index for a given sqrt_price by binary searching the ticks array.
+/// Returns the largest tick index whose sqrt_price <= the target.
+fn find_tick_for_sqrt_price(ticks: &[Tick], sqrt_price: u128) -> i32 {
+    if ticks.is_empty() {
+        return 0;
+    }
+    match ticks.binary_search_by_key(&sqrt_price, |t| t.sqrt_price) {
+        Ok(i) => ticks[i].index,
+        Err(0) => ticks[0].index,
+        Err(i) if i >= ticks.len() => ticks[ticks.len() - 1].index,
+        Err(i) => ticks[i - 1].index,
+    }
+}
+
+/// Walk through crossed ticks between before and after sqrt_price,
+/// updating liquidity as each tick is crossed.
+/// Returns (new_tick_current, new_liquidity).
+fn walk_crossed_ticks(
+    ticks: &[Tick],
+    mut liquidity: u128,
+    before_sqrt_price: u128,
+    after_sqrt_price: u128,
+    a_to_b: bool,
+) -> (i32, u128) {
+    if ticks.is_empty() {
+        return (0, liquidity);
+    }
+
+    let (price_lo, price_hi) = if a_to_b {
+        (after_sqrt_price, before_sqrt_price)
+    } else {
+        (before_sqrt_price, after_sqrt_price)
+    };
+
+    // Find ticks in the crossed range
+    for tick in ticks {
+        if tick.sqrt_price == 0 {
+            continue; // Turbos ticks may not have sqrt_price yet
+        }
+        if tick.sqrt_price > price_lo && tick.sqrt_price <= price_hi {
+            // This tick was crossed
+            if a_to_b {
+                // Crossing downward: subtract liquidity_net
+                liquidity = (liquidity as i128 - tick.liquidity_net) as u128;
+            } else {
+                // Crossing upward: add liquidity_net
+                liquidity = (liquidity as i128 + tick.liquidity_net) as u128;
+            }
+        }
+    }
+
+    let new_tick = find_tick_for_sqrt_price(ticks, after_sqrt_price);
+    (new_tick, liquidity)
+}
+
+/// Apply a liquidity delta to the ticks array.
+/// Updates liquidity_net and liquidity_gross at tick_lower and tick_upper.
+/// Inserts new ticks if they don't exist, removes if liquidity_gross reaches 0.
+/// Apply liquidity change to ticks.
+/// `signed_delta`: positive for add, negative for remove.
+/// Lower tick gets +delta to liquidity_net, upper gets -delta.
+/// Both get +abs(delta) to liquidity_gross (add) or -abs(delta) (remove).
+fn apply_liquidity_to_ticks(
+    ticks: &mut Vec<Tick>,
+    tick_lower: i32,
+    tick_upper: i32,
+    signed_delta: i128,
+) {
+    // gross_delta: positive when adding liquidity, negative when removing
+    let gross_delta = signed_delta;
+
+    // Lower tick: liquidity_net increases by delta
+    apply_delta_to_tick(ticks, tick_lower, signed_delta, gross_delta);
+    // Upper tick: liquidity_net decreases by delta (opposite direction)
+    apply_delta_to_tick(ticks, tick_upper, -signed_delta, gross_delta);
+
+    // Remove ticks with zero liquidity_gross
+    ticks.retain(|t| t.liquidity_gross > 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_ticks() -> Vec<Tick> {
+        vec![
+            Tick { index: -100, liquidity_net: 1000, liquidity_gross: 1000, sqrt_price: 100 },
+            Tick { index: 0, liquidity_net: -500, liquidity_gross: 500, sqrt_price: 200 },
+            Tick { index: 100, liquidity_net: -500, liquidity_gross: 500, sqrt_price: 300 },
+        ]
+    }
+
+    #[test]
+    fn test_find_tick_for_sqrt_price() {
+        let ticks = make_test_ticks();
+        assert_eq!(find_tick_for_sqrt_price(&ticks, 50), -100);
+        assert_eq!(find_tick_for_sqrt_price(&ticks, 150), -100);
+        assert_eq!(find_tick_for_sqrt_price(&ticks, 200), 0);
+        assert_eq!(find_tick_for_sqrt_price(&ticks, 250), 0);
+        assert_eq!(find_tick_for_sqrt_price(&ticks, 350), 100);
+    }
+
+    #[test]
+    fn test_apply_liquidity_add() {
+        let mut ticks = make_test_ticks();
+        // Add liquidity in range [-100, 0]
+        apply_liquidity_to_ticks(&mut ticks, -100, 0, 500);
+
+        // tick -100: liquidity_net += 500 → 1500, liquidity_gross += 500 → 1500
+        let t_neg100 = ticks.iter().find(|t| t.index == -100).unwrap();
+        assert_eq!(t_neg100.liquidity_net, 1500);
+        assert_eq!(t_neg100.liquidity_gross, 1500);
+
+        // tick 0: liquidity_net -= 500 → -1000, liquidity_gross += 500 → 1000
+        let t0 = ticks.iter().find(|t| t.index == 0).unwrap();
+        assert_eq!(t0.liquidity_net, -1000);
+        assert_eq!(t0.liquidity_gross, 1000);
+    }
+
+    #[test]
+    fn test_apply_liquidity_remove_deletes_tick() {
+        let mut ticks = make_test_ticks();
+        // Remove liquidity with delta=-500 in range [0, 100]
+        // Both tick 0 (gross=500) and tick 100 (gross=500) get gross_delta=-500 → 0 → removed
+        apply_liquidity_to_ticks(&mut ticks, 0, 100, -500);
+
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].index, -100); // only tick -100 survives
+    }
+
+    #[test]
+    fn test_apply_liquidity_creates_new_tick() {
+        let mut ticks = make_test_ticks();
+        apply_liquidity_to_ticks(&mut ticks, 50, 150, 200);
+
+        // Should have inserted tick at index 50 and 150
+        assert_eq!(ticks.len(), 5);
+        let t50 = ticks.iter().find(|t| t.index == 50).unwrap();
+        assert_eq!(t50.liquidity_net, 200);
+        assert_eq!(t50.liquidity_gross, 200);
+
+        let t150 = ticks.iter().find(|t| t.index == 150).unwrap();
+        assert_eq!(t150.liquidity_net, -200);
+        assert_eq!(t150.liquidity_gross, 200);
+    }
+
+    #[test]
+    fn test_walk_crossed_ticks_a_to_b() {
+        let ticks = make_test_ticks();
+        // Price going from 250 down to 50 (a_to_b = true)
+        // Crosses tick at sqrt_price=200 (index 0) and sqrt_price=100 (index -100)
+        let (new_tick, new_liq) = walk_crossed_ticks(
+            &ticks, 1000, 250, 50, true,
+        );
+        // Crossing tick 0 (liq_net=-500): 1000 - (-500) = 1500
+        // Crossing tick -100 (liq_net=1000): 1500 - 1000 = 500
+        assert_eq!(new_liq, 500);
+        assert_eq!(new_tick, -100);
+    }
+}
+
+/// Apply a liquidity_net delta to a single tick.
+/// `net_delta` affects liquidity_net (can be positive or negative).
+/// `gross_delta` is always the absolute liquidity change (positive for add, negative for remove).
+fn apply_delta_to_tick(ticks: &mut Vec<Tick>, tick_index: i32, net_delta: i128, gross_delta: i128) {
+    match ticks.binary_search_by_key(&tick_index, |t| t.index) {
+        Ok(i) => {
+            ticks[i].liquidity_net += net_delta;
+            if gross_delta > 0 {
+                ticks[i].liquidity_gross += gross_delta as u128;
+            } else {
+                ticks[i].liquidity_gross = ticks[i]
+                    .liquidity_gross
+                    .saturating_sub((-gross_delta) as u128);
+            }
+        }
+        Err(i) => {
+            ticks.insert(
+                i,
+                Tick {
+                    index: tick_index,
+                    liquidity_net: net_delta,
+                    liquidity_gross: gross_delta.unsigned_abs(),
+                    sqrt_price: 0,
+                },
+            );
+        }
+    }
 }
 

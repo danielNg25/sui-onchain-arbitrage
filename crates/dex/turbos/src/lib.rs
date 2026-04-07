@@ -19,7 +19,17 @@ use sui_client::{ObjectDataOptions, SuiClient};
 pub const TURBOS_SWAP_EVENT_TYPE: &str =
     "0x91bfbc386a41afcfd9b2533058d7e915a1d3829089cc268ff4333d54d6339ca1::pool::SwapEvent";
 
-const TURBOS_EVENT_TYPES: &[&str] = &[TURBOS_SWAP_EVENT_TYPE];
+pub const TURBOS_MINT_EVENT_TYPE: &str =
+    "0x91bfbc386a41afcfd9b2533058d7e915a1d3829089cc268ff4333d54d6339ca1::pool::MintEvent";
+
+pub const TURBOS_BURN_EVENT_TYPE: &str =
+    "0x91bfbc386a41afcfd9b2533058d7e915a1d3829089cc268ff4333d54d6339ca1::pool::BurnEvent";
+
+const TURBOS_EVENT_TYPES: &[&str] = &[
+    TURBOS_SWAP_EVENT_TYPE,
+    TURBOS_MINT_EVENT_TYPE,
+    TURBOS_BURN_EVENT_TYPE,
+];
 
 // ---------------------------------------------------------------------------
 // TurbosPool — internal CLMM state
@@ -83,10 +93,6 @@ impl Pool for TurbosPool {
         event_type: &str,
         parsed_json: &serde_json::Value,
     ) -> Result<Option<bool>, ArbError> {
-        if event_type != TURBOS_SWAP_EVENT_TYPE {
-            return Ok(None);
-        }
-
         let pool_id_str = match parsed_json["pool"].as_str() {
             Some(s) => s,
             None => return Ok(None),
@@ -96,19 +102,12 @@ impl Pool for TurbosPool {
             return Ok(None);
         }
 
-        let after_sqrt_price = events::parse_u128_field(parsed_json, "after_sqrt_price")?;
-        let vault_a = events::parse_u64_field(parsed_json, "vault_a_amount")?;
-        let vault_b = events::parse_u64_field(parsed_json, "vault_b_amount")?;
-        let steps = events::parse_u64_field(parsed_json, "steps")?;
-
-        {
-            let mut state = self.state.write().unwrap();
-            state.sqrt_price = after_sqrt_price;
-            state.reserve_a = vault_a;
-            state.reserve_b = vault_b;
+        match event_type {
+            TURBOS_SWAP_EVENT_TYPE => self.apply_swap_event(parsed_json),
+            TURBOS_MINT_EVENT_TYPE => self.apply_liquidity_event(parsed_json, true),
+            TURBOS_BURN_EVENT_TYPE => self.apply_liquidity_event(parsed_json, false),
+            _ => Ok(None),
         }
-
-        Ok(Some(steps > 1))
     }
 
     fn estimate_swap(
@@ -119,6 +118,171 @@ impl Pool for TurbosPool {
         Err(ArbError::InvalidData(
             "swap estimation requires clmm-math (Phase 2)".into(),
         ))
+    }
+}
+
+impl TurbosPool {
+    fn apply_swap_event(
+        &self,
+        json: &serde_json::Value,
+    ) -> Result<Option<bool>, ArbError> {
+        let after_sqrt_price = events::parse_u128_field(json, "after_sqrt_price")?;
+        let vault_a = events::parse_u64_field(json, "vault_a_amount")?;
+        let vault_b = events::parse_u64_field(json, "vault_b_amount")?;
+        let steps = events::parse_u64_field(json, "steps")?;
+
+        let mut state = self.state.write().unwrap();
+        state.sqrt_price = after_sqrt_price;
+        state.reserve_a = vault_a;
+        state.reserve_b = vault_b;
+
+        // Update tick_current from ticks array
+        let ticks = self.ticks.read().unwrap();
+        if !ticks.is_empty() {
+            state.tick_current = find_tick_for_sqrt_price(&ticks, after_sqrt_price);
+        }
+
+        // If multiple ticks crossed, update liquidity
+        if steps > 1 {
+            let before_sqrt_price = events::parse_u128_field(json, "before_sqrt_price")?;
+            let a_to_b = json["atob"].as_bool().unwrap_or(true);
+            let (_, new_liquidity) = walk_crossed_ticks(
+                &ticks,
+                state.liquidity,
+                before_sqrt_price,
+                after_sqrt_price,
+                a_to_b,
+            );
+            state.liquidity = new_liquidity;
+        }
+
+        Ok(Some(steps > 1))
+    }
+
+    fn apply_liquidity_event(
+        &self,
+        json: &serde_json::Value,
+        is_add: bool,
+    ) -> Result<Option<bool>, ArbError> {
+        // Turbos uses tick_lower_index / tick_upper_index
+        let tick_lower = events::parse_i32_field(json, "tick_lower_index")?;
+        let tick_upper = events::parse_i32_field(json, "tick_upper_index")?;
+        let liquidity_delta = events::parse_u128_field(json, "liquidity_delta")?;
+
+        let mut state = self.state.write().unwrap();
+
+        // Update active liquidity if current tick is in range
+        let tick_current = state.tick_current;
+        if tick_current >= tick_lower && tick_current < tick_upper {
+            if is_add {
+                state.liquidity += liquidity_delta;
+            } else {
+                state.liquidity = state.liquidity.saturating_sub(liquidity_delta);
+            }
+        }
+
+        // Update tick data
+        let mut ticks = self.ticks.write().unwrap();
+        let signed_delta = if is_add {
+            liquidity_delta as i128
+        } else {
+            -(liquidity_delta as i128)
+        };
+        apply_liquidity_to_ticks(&mut ticks, tick_lower, tick_upper, signed_delta);
+
+        Ok(Some(false))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tick helpers (shared logic with Cetus, could be extracted to dex-common)
+// ---------------------------------------------------------------------------
+
+fn find_tick_for_sqrt_price(ticks: &[Tick], sqrt_price: u128) -> i32 {
+    if ticks.is_empty() {
+        return 0;
+    }
+    // Turbos ticks may not have sqrt_price populated yet — use index-based fallback
+    if ticks[0].sqrt_price == 0 {
+        return ticks[0].index;
+    }
+    match ticks.binary_search_by_key(&sqrt_price, |t| t.sqrt_price) {
+        Ok(i) => ticks[i].index,
+        Err(0) => ticks[0].index,
+        Err(i) if i >= ticks.len() => ticks[ticks.len() - 1].index,
+        Err(i) => ticks[i - 1].index,
+    }
+}
+
+fn walk_crossed_ticks(
+    ticks: &[Tick],
+    mut liquidity: u128,
+    before_sqrt_price: u128,
+    after_sqrt_price: u128,
+    a_to_b: bool,
+) -> (i32, u128) {
+    if ticks.is_empty() {
+        return (0, liquidity);
+    }
+
+    let (price_lo, price_hi) = if a_to_b {
+        (after_sqrt_price, before_sqrt_price)
+    } else {
+        (before_sqrt_price, after_sqrt_price)
+    };
+
+    for tick in ticks {
+        if tick.sqrt_price == 0 {
+            continue;
+        }
+        if tick.sqrt_price > price_lo && tick.sqrt_price <= price_hi {
+            if a_to_b {
+                liquidity = (liquidity as i128 - tick.liquidity_net) as u128;
+            } else {
+                liquidity = (liquidity as i128 + tick.liquidity_net) as u128;
+            }
+        }
+    }
+
+    let new_tick = find_tick_for_sqrt_price(ticks, after_sqrt_price);
+    (new_tick, liquidity)
+}
+
+fn apply_liquidity_to_ticks(
+    ticks: &mut Vec<Tick>,
+    tick_lower: i32,
+    tick_upper: i32,
+    signed_delta: i128,
+) {
+    let gross_delta = signed_delta;
+    apply_delta_to_tick(ticks, tick_lower, signed_delta, gross_delta);
+    apply_delta_to_tick(ticks, tick_upper, -signed_delta, gross_delta);
+    ticks.retain(|t| t.liquidity_gross > 0);
+}
+
+fn apply_delta_to_tick(ticks: &mut Vec<Tick>, tick_index: i32, net_delta: i128, gross_delta: i128) {
+    match ticks.binary_search_by_key(&tick_index, |t| t.index) {
+        Ok(i) => {
+            ticks[i].liquidity_net += net_delta;
+            if gross_delta > 0 {
+                ticks[i].liquidity_gross += gross_delta as u128;
+            } else {
+                ticks[i].liquidity_gross = ticks[i]
+                    .liquidity_gross
+                    .saturating_sub((-gross_delta) as u128);
+            }
+        }
+        Err(i) => {
+            ticks.insert(
+                i,
+                Tick {
+                    index: tick_index,
+                    liquidity_net: net_delta,
+                    liquidity_gross: gross_delta.unsigned_abs(),
+                    sqrt_price: 0,
+                },
+            );
+        }
     }
 }
 
