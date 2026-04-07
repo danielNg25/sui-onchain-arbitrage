@@ -162,6 +162,39 @@ impl SuiClient {
             .with_context(|| format!("failed to parse gas price '{}'", result))
     }
 
+    /// Fetch an object at a specific version (historical state).
+    pub async fn try_get_past_object(
+        &self,
+        id: &str,
+        version: u64,
+        options: ObjectDataOptions,
+    ) -> Result<SuiObjectResponse> {
+        // sui_tryGetPastObject returns { status: "VersionFound", details: SuiObjectData } or other statuses
+        let resp: serde_json::Value = self
+            .rpc_call(
+                "sui_tryGetPastObject",
+                serde_json::json!([id, version, options]),
+            )
+            .await?;
+
+        // Extract the object data from the response
+        let status = resp["status"].as_str().unwrap_or("");
+        if status == "VersionFound" {
+            let data: crate::types::SuiObjectData =
+                serde_json::from_value(resp["details"].clone())
+                    .with_context(|| "failed to parse past object details")?;
+            Ok(SuiObjectResponse {
+                data: Some(data),
+                error: None,
+            })
+        } else {
+            Ok(SuiObjectResponse {
+                data: None,
+                error: Some(serde_json::json!({ "status": status })),
+            })
+        }
+    }
+
     /// Get the latest checkpoint sequence number.
     pub async fn get_latest_checkpoint_sequence_number(&self) -> Result<u64> {
         let result: String = self

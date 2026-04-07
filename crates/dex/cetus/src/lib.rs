@@ -1,5 +1,5 @@
 mod events;
-pub(crate) mod raw;
+pub mod raw;
 mod ticks;
 
 use std::collections::HashSet;
@@ -408,6 +408,22 @@ impl DexRegistry for CetusRegistry {
     fn pool_count(&self) -> usize {
         self.pools.len()
     }
+}
+
+/// Get sqrt_price for a pool (for testing/verification).
+pub fn get_pool_sqrt_price(registry: &CetusRegistry, pool_id: &ObjectId) -> Option<u128> {
+    registry
+        .pools
+        .get(pool_id)
+        .map(|p| p.state.read().unwrap().sqrt_price)
+}
+
+/// Get reserve_a and reserve_b for a pool (for testing/verification).
+pub fn get_pool_reserves(registry: &CetusRegistry, pool_id: &ObjectId) -> Option<(u64, u64)> {
+    registry.pools.get(pool_id).map(|p| {
+        let s = p.state.read().unwrap();
+        (s.reserve_a, s.reserve_b)
+    })
 }
 
 /// Fetch ticks for a pool (for testing/verification).

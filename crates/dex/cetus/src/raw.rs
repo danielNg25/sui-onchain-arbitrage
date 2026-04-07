@@ -7,7 +7,7 @@ use serde::Deserialize;
 use arb_types::error::ArbError;
 
 /// Partially parsed Cetus pool — only the fields we need.
-pub(crate) struct CetusPoolPartial {
+pub struct CetusPoolPartial {
     pub coin_a: u64,
     pub coin_b: u64,
     pub tick_spacing: u32,
@@ -24,7 +24,7 @@ pub(crate) struct CetusPoolPartial {
 /// This avoids having to perfectly match every nested struct (SkipList, Bag,
 /// RewarderManager, PositionManager) with serde. We read the fields we need
 /// and skip the rest using their known sizes.
-pub(crate) fn parse_cetus_pool(bytes: &[u8]) -> Result<CetusPoolPartial, ArbError> {
+pub fn parse_cetus_pool(bytes: &[u8]) -> Result<CetusPoolPartial, ArbError> {
     let mut r = BcsReader::new(bytes);
 
     // Pool fields (exact order from Move struct):
