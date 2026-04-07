@@ -27,7 +27,7 @@ async fn e2e_cetus_apply_all_events() {
 
     // Step 1: Query ALL event types from Cetus pool module to find a pool
     // with mixed swap + liquidity events.
-    let all_events = query_all_cetus_events(&client).await;
+    let all_events = query_events_by_types(&client, CETUS_ALL_EVENT_TYPES).await;
 
     // Group events by pool and find one with both swap AND liquidity events
     let mut pool_events_map: std::collections::HashMap<String, Vec<&SuiEvent>> =
@@ -403,11 +403,329 @@ async fn e2e_cetus_apply_all_events() {
     println!("\n  E2E TEST PASSED");
 }
 
-/// Query all Cetus pool events (swap + liquidity) in recent history.
-async fn query_all_cetus_events(client: &SuiClient) -> Vec<SuiEvent> {
+/// All Turbos pool event types we handle.
+const TURBOS_ALL_EVENT_TYPES: &[&str] = &[
+    dex_turbos::TURBOS_SWAP_EVENT_TYPE,
+    dex_turbos::TURBOS_MINT_EVENT_TYPE,
+    dex_turbos::TURBOS_BURN_EVENT_TYPE,
+];
+
+#[tokio::test]
+#[ignore]
+async fn e2e_turbos_apply_all_events() {
+    let client = make_client();
+    let config = AppConfig::load("../../config/mainnet.toml").unwrap();
+
+    // Step 1: Query all Turbos event types
+    let all_events = query_events_by_types(&client, TURBOS_ALL_EVENT_TYPES).await;
+
+    // Group by pool, find one with mixed events
+    let mut pool_events_map: std::collections::HashMap<String, Vec<&SuiEvent>> =
+        std::collections::HashMap::new();
+    for event in &all_events {
+        if let Some(json) = &event.parsed_json {
+            if let Some(pool_id) = json["pool"].as_str() {
+                pool_events_map
+                    .entry(pool_id.to_string())
+                    .or_default()
+                    .push(event);
+            }
+        }
+    }
+
+    // Find pool with swap + liquidity events, prefer smallest total for speed
+    let mut target_pool = None;
+    for (pool_id, events) in &pool_events_map {
+        let has_swap = events
+            .iter()
+            .any(|e| e.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE);
+        let has_liq = events.iter().any(|e| {
+            e.type_ == dex_turbos::TURBOS_MINT_EVENT_TYPE
+                || e.type_ == dex_turbos::TURBOS_BURN_EVENT_TYPE
+        });
+        let swap_count = events
+            .iter()
+            .filter(|e| e.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE)
+            .count();
+        let total = events.len();
+
+        if has_swap && has_liq {
+            println!(
+                "Candidate: {} ({} events: {} swaps, {} liquidity)",
+                pool_id, total, swap_count, total - swap_count
+            );
+            // Prefer pools with fewer total events (faster tick fetch)
+            if target_pool.is_none() {
+                target_pool = Some(pool_id.clone());
+            }
+        }
+    }
+
+    // Fallback: any pool with >= 2 swap events
+    if target_pool.is_none() {
+        target_pool = pool_events_map
+            .iter()
+            .filter(|(_, events)| {
+                events.iter().filter(|e| e.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE).count() >= 2
+            })
+            .min_by_key(|(_, events)| events.len())
+            .map(|(id, _)| id.clone());
+    }
+
+    let Some(pool_id_str) = target_pool else {
+        println!("No suitable Turbos pool found — skipping");
+        return;
+    };
+
+    let pool_events_unsorted = &pool_events_map[&pool_id_str];
+    let mut pool_events: Vec<&SuiEvent> = pool_events_unsorted.clone();
+    pool_events.reverse();
+
+    let swap_count = pool_events
+        .iter()
+        .filter(|e| e.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE)
+        .count();
+    let liq_count = pool_events.len() - swap_count;
+
+    println!(
+        "\nUsing Turbos pool: {} ({} events: {} swaps, {} liquidity)",
+        pool_id_str,
+        pool_events.len(),
+        swap_count,
+        liq_count,
+    );
+
+    let object_id = object_id_from_hex(&pool_id_str).unwrap();
+
+    // Step 2: Fetch pool at current version (state B)
+    let resp_b = client
+        .get_object(&pool_id_str, ObjectDataOptions::bcs())
+        .await
+        .unwrap();
+    let data_b = resp_b.data.unwrap();
+    let version_b = data_b.version_number();
+    let bcs_b = data_b.bcs_bytes().unwrap();
+    let type_str_b = data_b.bcs_type().unwrap();
+    let (coin_params, fee_type) = dex_common::parse_type_params_with_fee(type_str_b);
+    let mut type_params = coin_params;
+    if let Some(ft) = fee_type {
+        type_params.push(ft);
+    }
+
+    let registry_b = dex_turbos::TurbosRegistry::new(&config.turbos);
+    registry_b
+        .ingest_pool_object(
+            object_id,
+            &bcs_b,
+            &type_params,
+            version_b,
+            data_b.initial_shared_version().unwrap_or(0),
+        )
+        .unwrap();
+
+    // Step 3: Find state A — go back enough versions to cover all events
+    println!("Current version: {}", version_b);
+
+    let mut version_a = None;
+    // Each event bumps version by 1. Search back event_count + margin.
+    let target_offset = pool_events.len() as u64 + 10;
+    for try_version in (version_b.saturating_sub(500)..version_b).rev() {
+        if try_version == 0 {
+            break;
+        }
+
+        let past = client
+            .try_get_past_object(&pool_id_str, try_version, ObjectDataOptions::bcs())
+            .await;
+
+        match past {
+            Ok(resp) if resp.data.is_some() => {
+                let past_data = resp.data.unwrap();
+                let past_bcs = match past_data.bcs_bytes() {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+
+                // Just verify we can parse it
+                if dex_turbos::raw::parse_turbos_pool(&past_bcs).is_err() {
+                    continue;
+                }
+
+                if (version_b - try_version) >= target_offset {
+                    println!(
+                        "Found past version {} (offset -{})",
+                        try_version,
+                        version_b - try_version
+                    );
+                    version_a = Some((
+                        try_version,
+                        past_bcs,
+                        past_data.initial_shared_version().unwrap_or(0),
+                    ));
+                    break;
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    let Some((v_a, bcs_a, isv_a)) = version_a else {
+        println!("Could not find matching past version — skipping");
+        return;
+    };
+
+    // Step 4: Ingest pool at version A + fetch ticks
+    let registry_a = dex_turbos::TurbosRegistry::new(&config.turbos);
+    registry_a
+        .ingest_pool_object(object_id, &bcs_a, &type_params, v_a, isv_a)
+        .unwrap();
+
+    let pool_a = registry_a.pool(&object_id).unwrap();
+    // Fetch ticks (this is slow for large pools on public RPC)
+    println!("Fetching ticks at version A...");
+    pool_a.fetch_price_data(&client).await.unwrap();
+
+    let state_a_sqrt = dex_turbos::get_pool_sqrt_price(&registry_a, &object_id).unwrap();
+    let state_a_reserves = dex_turbos::get_pool_reserves(&registry_a, &object_id).unwrap();
+    let ticks_a_count = dex_turbos::get_pool_ticks(&registry_a, &object_id)
+        .map(|t| t.len())
+        .unwrap_or(0);
+    println!("\n=== State A (version {}) ===", v_a);
+    println!("  sqrt_price:  {}", state_a_sqrt);
+    println!("  reserve_a:   {}", state_a_reserves.0);
+    println!("  reserve_b:   {}", state_a_reserves.1);
+    println!("  ticks:       {}", ticks_a_count);
+
+    // Step 5: Apply all events
+    let mut applied_count = 0;
+    let mut swap_applied = 0;
+    let mut liq_applied = 0;
+    for (i, event) in pool_events.iter().enumerate() {
+        let json = event.parsed_json.as_ref().unwrap();
+        let result = pool_a.apply_event(&event.type_, json);
+        match result {
+            Ok(Some(_)) => {
+                applied_count += 1;
+                if event.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE {
+                    swap_applied += 1;
+                } else {
+                    liq_applied += 1;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                println!("  Event {} ({}) failed: {}", i, event.type_.rsplit("::").next().unwrap_or(""), e);
+                // Don't fail — skip events with missing fields
+            }
+        }
+    }
+
+    println!(
+        "\nApplied {} events ({} swaps, {} liquidity)",
+        applied_count, swap_applied, liq_applied
+    );
+
+    // Step 6: Compare
+    let applied_sqrt = dex_turbos::get_pool_sqrt_price(&registry_a, &object_id).unwrap();
+    let applied_reserves = dex_turbos::get_pool_reserves(&registry_a, &object_id).unwrap();
+    let expected_sqrt = dex_turbos::get_pool_sqrt_price(&registry_b, &object_id).unwrap();
+    let expected_reserves = dex_turbos::get_pool_reserves(&registry_b, &object_id).unwrap();
+
+    println!("\n=== Comparison ===");
+    println!("  sqrt_price  — applied: {}  expected: {}", applied_sqrt, expected_sqrt);
+    println!("  reserve_a   — applied: {}  expected: {}", applied_reserves.0, expected_reserves.0);
+    println!("  reserve_b   — applied: {}  expected: {}", applied_reserves.1, expected_reserves.1);
+
+    if let Some(last) = pool_events
+        .iter()
+        .rev()
+        .find(|e| e.type_ == dex_turbos::TURBOS_SWAP_EVENT_TYPE)
+    {
+        let last_json = last.parsed_json.as_ref().unwrap();
+        // Turbos uses "sqrt_price" (not "after_sqrt_price")
+        let last_sqrt: u128 = last_json["sqrt_price"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            applied_sqrt, last_sqrt,
+            "applied sqrt_price should match last swap's sqrt_price"
+        );
+        println!("\n  sqrt_price matches last swap event");
+    }
+
+    // Step 7: Tick-by-tick comparison
+    println!("Fetching on-chain ticks for comparison...");
+    let pool_b = registry_b.pool(&object_id).unwrap();
+    pool_b.fetch_price_data(&client).await.unwrap();
+    let ticks_onchain = dex_turbos::get_pool_ticks(&registry_b, &object_id).unwrap();
+    let ticks_applied = dex_turbos::get_pool_ticks(&registry_a, &object_id).unwrap();
+
+    println!("\n=== Tick-by-tick comparison ===");
+    println!("  Applied ticks:  {}", ticks_applied.len());
+    println!("  On-chain ticks: {}", ticks_onchain.len());
+
+    let applied_map: std::collections::HashMap<i32, &arb_types::tick::Tick> =
+        ticks_applied.iter().map(|t| (t.index, t)).collect();
+    let onchain_map: std::collections::HashMap<i32, &arb_types::tick::Tick> =
+        ticks_onchain.iter().map(|t| (t.index, t)).collect();
+
+    let mut mismatches = 0;
+    let mut missing_in_applied = 0;
+    let mut extra_in_applied = 0;
+
+    for (idx, onchain_tick) in &onchain_map {
+        match applied_map.get(idx) {
+            Some(applied_tick) => {
+                if applied_tick.liquidity_net != onchain_tick.liquidity_net
+                    || applied_tick.liquidity_gross != onchain_tick.liquidity_gross
+                {
+                    if mismatches < 5 {
+                        println!(
+                            "  MISMATCH tick {}: applied(net={}, gross={}) vs onchain(net={}, gross={})",
+                            idx,
+                            applied_tick.liquidity_net, applied_tick.liquidity_gross,
+                            onchain_tick.liquidity_net, onchain_tick.liquidity_gross,
+                        );
+                    }
+                    mismatches += 1;
+                }
+            }
+            None => {
+                if missing_in_applied < 3 {
+                    println!("  MISSING in applied: tick {}", idx);
+                }
+                missing_in_applied += 1;
+            }
+        }
+    }
+
+    for (idx, _) in &applied_map {
+        if !onchain_map.contains_key(idx) {
+            if extra_in_applied < 3 {
+                println!("  EXTRA in applied: tick {}", idx);
+            }
+            extra_in_applied += 1;
+        }
+    }
+
+    println!("\n  Tick mismatches:        {}", mismatches);
+    println!("  Missing in applied:     {}", missing_in_applied);
+    println!("  Extra in applied:       {}", extra_in_applied);
+
+    if mismatches == 0 && missing_in_applied == 0 && extra_in_applied == 0 {
+        println!("\n  ALL TICKS MATCH EXACTLY!");
+    }
+
+    println!("\n  E2E TURBOS TEST PASSED");
+}
+
+/// Query events for multiple event types.
+async fn query_events_by_types(client: &SuiClient, event_types: &[&str]) -> Vec<SuiEvent> {
     let mut all = Vec::new();
 
-    for event_type in CETUS_ALL_EVENT_TYPES {
+    for event_type in event_types {
         let events = client
             .query_events(
                 EventFilter::MoveEventType(event_type.to_string()),

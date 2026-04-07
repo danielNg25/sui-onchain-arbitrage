@@ -7,7 +7,7 @@ use serde::Deserialize;
 use arb_types::error::ArbError;
 
 /// Partially parsed Turbos pool — only the fields we need.
-pub(crate) struct TurbosPoolPartial {
+pub struct TurbosPoolPartial {
     pub coin_a: u64,
     pub coin_b: u64,
     pub sqrt_price: u128,
@@ -24,7 +24,7 @@ pub(crate) struct TurbosPoolPartial {
 /// Turbos is closed source. Layout validated against real mainnet BCS snapshot.
 /// Key difference from naive serde approach: tick_map is Table { id: UID, size: u64 },
 /// not just a 32-byte UID.
-pub(crate) fn parse_turbos_pool(bytes: &[u8]) -> Result<TurbosPoolPartial, ArbError> {
+pub fn parse_turbos_pool(bytes: &[u8]) -> Result<TurbosPoolPartial, ArbError> {
     let mut r = BcsReader::new(bytes);
 
     let _id = r.read_bytes(32)?;              // UID

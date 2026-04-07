@@ -1,5 +1,5 @@
 mod events;
-pub(crate) mod raw;
+pub mod raw;
 mod ticks;
 
 use std::collections::HashSet;
@@ -126,37 +126,34 @@ impl TurbosPool {
         &self,
         json: &serde_json::Value,
     ) -> Result<Option<bool>, ArbError> {
-        let after_sqrt_price = events::parse_u128_field(json, "after_sqrt_price")?;
-        let vault_a = events::parse_u64_field(json, "vault_a_amount")?;
-        let vault_b = events::parse_u64_field(json, "vault_b_amount")?;
-        let steps = events::parse_u64_field(json, "steps")?;
+        // Turbos SwapEvent field names differ from Cetus:
+        //   sqrt_price (current/after), tick_current_index, tick_pre_index,
+        //   a_to_b, amount_a, amount_b, fee_amount, liquidity
+        //   No vault_a_amount/vault_b_amount or steps fields.
+        let sqrt_price = events::parse_u128_field(json, "sqrt_price")?;
+        let amount_a = events::parse_u64_field(json, "amount_a")?;
+        let amount_b = events::parse_u64_field(json, "amount_b")?;
+        let a_to_b = json["a_to_b"].as_bool().unwrap_or(true);
+        let tick_current = events::parse_i32_field(json, "tick_current_index")?;
+        let tick_pre = events::parse_i32_field(json, "tick_pre_index")?;
+        let liquidity = events::parse_u128_field(json, "liquidity")?;
 
         let mut state = self.state.write().unwrap();
-        state.sqrt_price = after_sqrt_price;
-        state.reserve_a = vault_a;
-        state.reserve_b = vault_b;
+        state.sqrt_price = sqrt_price;
+        state.tick_current = tick_current;
+        state.liquidity = liquidity;
 
-        // Update tick_current from ticks array
-        let ticks = self.ticks.read().unwrap();
-        if !ticks.is_empty() {
-            state.tick_current = find_tick_for_sqrt_price(&ticks, after_sqrt_price);
+        // Update reserves from swap amounts (no vault amounts in Turbos events)
+        if a_to_b {
+            state.reserve_a += amount_a;
+            state.reserve_b = state.reserve_b.saturating_sub(amount_b);
+        } else {
+            state.reserve_a = state.reserve_a.saturating_sub(amount_a);
+            state.reserve_b += amount_b;
         }
 
-        // If multiple ticks crossed, update liquidity
-        if steps > 1 {
-            let before_sqrt_price = events::parse_u128_field(json, "before_sqrt_price")?;
-            let a_to_b = json["atob"].as_bool().unwrap_or(true);
-            let (_, new_liquidity) = walk_crossed_ticks(
-                &ticks,
-                state.liquidity,
-                before_sqrt_price,
-                after_sqrt_price,
-                a_to_b,
-            );
-            state.liquidity = new_liquidity;
-        }
-
-        Ok(Some(steps > 1))
+        let ticks_crossed = tick_current != tick_pre;
+        Ok(Some(ticks_crossed))
     }
 
     fn apply_liquidity_event(
@@ -209,56 +206,6 @@ impl TurbosPool {
 // Tick helpers (shared logic with Cetus, could be extracted to dex-common)
 // ---------------------------------------------------------------------------
 
-fn find_tick_for_sqrt_price(ticks: &[Tick], sqrt_price: u128) -> i32 {
-    if ticks.is_empty() {
-        return 0;
-    }
-    // Turbos ticks may not have sqrt_price populated yet — use index-based fallback
-    if ticks[0].sqrt_price == 0 {
-        return ticks[0].index;
-    }
-    match ticks.binary_search_by_key(&sqrt_price, |t| t.sqrt_price) {
-        Ok(i) => ticks[i].index,
-        Err(0) => ticks[0].index,
-        Err(i) if i >= ticks.len() => ticks[ticks.len() - 1].index,
-        Err(i) => ticks[i - 1].index,
-    }
-}
-
-fn walk_crossed_ticks(
-    ticks: &[Tick],
-    mut liquidity: u128,
-    before_sqrt_price: u128,
-    after_sqrt_price: u128,
-    a_to_b: bool,
-) -> (i32, u128) {
-    if ticks.is_empty() {
-        return (0, liquidity);
-    }
-
-    let (price_lo, price_hi) = if a_to_b {
-        (after_sqrt_price, before_sqrt_price)
-    } else {
-        (before_sqrt_price, after_sqrt_price)
-    };
-
-    for tick in ticks {
-        if tick.sqrt_price == 0 {
-            continue;
-        }
-        if tick.sqrt_price > price_lo && tick.sqrt_price <= price_hi {
-            if a_to_b {
-                liquidity = (liquidity as i128 - tick.liquidity_net) as u128;
-            } else {
-                liquidity = (liquidity as i128 + tick.liquidity_net) as u128;
-            }
-        }
-    }
-
-    let new_tick = find_tick_for_sqrt_price(ticks, after_sqrt_price);
-    (new_tick, liquidity)
-}
-
 fn apply_liquidity_to_ticks(
     ticks: &mut Vec<Tick>,
     tick_lower: i32,
@@ -300,6 +247,24 @@ fn apply_delta_to_tick(ticks: &mut Vec<Tick>, tick_index: i32, net_delta: i128, 
 // ---------------------------------------------------------------------------
 // TurbosRegistry
 // ---------------------------------------------------------------------------
+
+/// Get sqrt_price for a pool (for testing/verification).
+pub fn get_pool_sqrt_price(registry: &TurbosRegistry, pool_id: &[u8; 32]) -> Option<u128> {
+    registry.pools.get(pool_id).map(|p| p.state.read().unwrap().sqrt_price)
+}
+
+/// Get reserves for a pool (for testing/verification).
+pub fn get_pool_reserves(registry: &TurbosRegistry, pool_id: &[u8; 32]) -> Option<(u64, u64)> {
+    registry.pools.get(pool_id).map(|p| {
+        let s = p.state.read().unwrap();
+        (s.reserve_a, s.reserve_b)
+    })
+}
+
+/// Get the internal ticks snapshot for a pool (for testing/verification).
+pub fn get_pool_ticks(registry: &TurbosRegistry, pool_id: &[u8; 32]) -> Option<Vec<Tick>> {
+    registry.pools.get(pool_id).map(|p| p.ticks.read().unwrap().clone())
+}
 
 /// Get ticks table ID for a pool (for testing/verification).
 pub fn get_ticks_table_id(registry: &TurbosRegistry, pool_id: &[u8; 32]) -> Option<[u8; 32]> {
