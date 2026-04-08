@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `math_u256` module: u256 helpers (`mul_div_floor`, `mul_div_ceil`, `checked_shlw`, `div_round`) via `ethnum`
   - 37 unit tests covering tick conversions, swap steps, multi-tick simulation, edge cases
 - Wired `clmm-math` into `dex-cetus` and `dex-turbos` `estimate_swap()` implementations (replaces Phase 2 placeholder stubs)
+- Mainnet verification tests (`swap_verification.rs`): local `simulate_swap` matches `devInspectTransactionBlock` with 0 diff for both Cetus (6 tests: 0.01/1/10 SUI a2b + 0.01/1/10 USDC b2a) and Turbos (4 tests: 0.01/1 SUI a2b + 0.01/1 USDC b2a)
+- BCS transaction builder for devInspect: encodes `calculate_swap_result` (Cetus) and `compute_swap_result` (Turbos) calls
 
 ### Changed
 - Turbos tick deserialization now computes `sqrt_price` via `clmm_math::tick_to_sqrt_price(tick_index)` instead of hardcoded `0`

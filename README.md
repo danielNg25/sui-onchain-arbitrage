@@ -70,7 +70,7 @@ High-performance Rust arbitrage bot for Sui DEX pools, targeting **Cetus** and *
 
 ### Phase 2: Math (simulate locally)
 - [x] `clmm-math` — port tick math + compute_swap_step from Cetus sources
-- [ ] Verify: compare local simulate_swap output against devInspectTransactionBlock
+- [x] Verify: compare local simulate_swap output against devInspectTransactionBlock
 
 ### Phase 3: Strategy (find opportunities)
 - [ ] `arb-engine` — graph construction, cycle finding, binary search amount optimization
