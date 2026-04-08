@@ -315,60 +315,48 @@ async fn verify_cetus_simulate_vs_onchain() {
         );
 
         let result = client.dev_inspect(DUMMY_SENDER, &tx_b64).await;
-        match result {
-            Ok(inspect) => {
-                if let Some(error) = &inspect.error {
-                    println!("  On-chain ERROR: {}", error);
-                    continue;
-                }
-                if let Some(results) = &inspect.results {
-                    if let Some(first) = results.first() {
-                        if let Some(return_values) = &first.return_values {
-                            if let Some((bcs_bytes, _type_tag)) = return_values.first() {
-                                let (on_amount_in, on_amount_out, on_fee, on_sqrt_after) =
-                                    parse_cetus_swap_result(bcs_bytes);
+        let inspect = result.unwrap_or_else(|e| panic!("devInspect RPC error: {}", e));
+        assert!(inspect.error.is_none(), "devInspect on-chain error: {:?}", inspect.error);
 
-                                println!("  Chain: amount_in={}, amount_out={}, fee={}, sqrt_after={}",
-                                    on_amount_in, on_amount_out, on_fee, on_sqrt_after);
+        let results = inspect.results.as_ref().expect("devInspect returned no results");
+        let first = results.first().expect("devInspect results empty");
+        let return_values = first.return_values.as_ref().expect("no return values");
+        let (bcs_bytes, _type_tag) = return_values.first().expect("return values empty");
 
-                                // Compare with tolerance of ±1 (rounding)
-                                let in_diff = (local.amount_in as i64 - on_amount_in as i64).unsigned_abs();
-                                let out_diff = (local.amount_out as i64 - on_amount_out as i64).unsigned_abs();
-                                let fee_diff = (local.fee_total as i64 - on_fee as i64).unsigned_abs();
+        let (on_amount_in, on_amount_out, on_fee, on_sqrt_after) =
+            parse_cetus_swap_result(bcs_bytes);
 
-                                println!("  Diff: amount_in={}, amount_out={}, fee={}", in_diff, out_diff, fee_diff);
+        println!("  Chain: amount_in={}, amount_out={}, fee={}, sqrt_after={}",
+            on_amount_in, on_amount_out, on_fee, on_sqrt_after);
 
-                                assert!(
-                                    in_diff <= 1,
-                                    "amount_in mismatch: local={} on-chain={} diff={}",
-                                    local.amount_in, on_amount_in, in_diff
-                                );
-                                assert!(
-                                    out_diff <= 1,
-                                    "amount_out mismatch: local={} on-chain={} diff={}",
-                                    local.amount_out, on_amount_out, out_diff
-                                );
-                                assert!(
-                                    fee_diff <= 1,
-                                    "fee mismatch: local={} on-chain={} diff={}",
-                                    local.fee_total, on_fee, fee_diff
-                                );
-                                assert_eq!(
-                                    local.sqrt_price_after, on_sqrt_after,
-                                    "sqrt_price_after mismatch"
-                                );
+        // Compare with tolerance of ±1 (rounding)
+        let in_diff = local.amount_in.abs_diff(on_amount_in);
+        let out_diff = local.amount_out.abs_diff(on_amount_out);
+        let fee_diff = local.fee_total.abs_diff(on_fee);
 
-                                println!("  ✓ MATCH");
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("  devInspect RPC error: {}", e);
-                panic!("devInspect failed: {}", e);
-            }
-        }
+        println!("  Diff: amount_in={}, amount_out={}, fee={}", in_diff, out_diff, fee_diff);
+
+        assert!(
+            in_diff <= 1,
+            "amount_in mismatch: local={} on-chain={} diff={}",
+            local.amount_in, on_amount_in, in_diff
+        );
+        assert!(
+            out_diff <= 1,
+            "amount_out mismatch: local={} on-chain={} diff={}",
+            local.amount_out, on_amount_out, out_diff
+        );
+        assert!(
+            fee_diff <= 1,
+            "fee mismatch: local={} on-chain={} diff={}",
+            local.fee_total, on_fee, fee_diff
+        );
+        assert_eq!(
+            local.sqrt_price_after, on_sqrt_after,
+            "sqrt_price_after mismatch"
+        );
+
+        println!("  ✓ MATCH");
     }
 }
 
@@ -468,87 +456,56 @@ async fn verify_turbos_simulate_vs_onchain() {
             &tx_bytes,
         );
 
-        let result = client.dev_inspect(DUMMY_SENDER, &tx_b64).await;
-        match result {
-            Ok(inspect) => {
-                if let Some(error) = &inspect.error {
-                    println!("  On-chain ERROR: {}", error);
-                    // Turbos may fail if the pool doesn't support compute_swap_result
-                    // or the published_at is wrong. Log and continue.
-                    continue;
-                }
-                if let Some(results) = &inspect.results {
-                    if let Some(first) = results.first() {
-                        if let Some(return_values) = &first.return_values {
-                            if let Some((bcs_bytes, _type_tag)) = return_values.first() {
-                                // Turbos ComputeSwapState: parse first fields
-                                // The exact struct is unknown (closed source), try parsing as:
-                                // amount_a: u64, amount_b: u64, ...
-                                // or possibly: amount_calculated: u128, ...
-                                // We'll parse what we can and compare
-                                println!("  Chain return ({} bytes): {:?}",
-                                    bcs_bytes.len(), &bcs_bytes[..bcs_bytes.len().min(48)]);
+        let inspect = client.dev_inspect(DUMMY_SENDER, &tx_b64).await
+            .unwrap_or_else(|e| panic!("devInspect RPC error: {}", e));
+        assert!(inspect.error.is_none(), "devInspect on-chain error: {:?}", inspect.error);
 
-                                // Turbos ComputeSwapState uses u128 fields:
-                                // amount_a(u128), amount_b(u128), ...
-                                // First field is the specified amount echoed back,
-                                // second is the computed output amount.
-                                if bcs_bytes.len() >= 32 {
-                                    let field_a = u128::from_le_bytes(
-                                        bcs_bytes[0..16].try_into().unwrap(),
-                                    );
-                                    let field_b = u128::from_le_bytes(
-                                        bcs_bytes[16..32].try_into().unwrap(),
-                                    );
+        let results = inspect.results.as_ref().expect("devInspect returned no results");
+        let first = results.first().expect("devInspect results empty");
+        let return_values = first.return_values.as_ref().expect("no return values");
+        let (bcs_bytes, _type_tag) = return_values.first().expect("return values empty");
 
-                                    // For a2b: field_a = amount_a (input), field_b = amount_b (output)
-                                    // For b2a: field_a = amount_a (output), field_b = amount_b (input)
-                                    let (on_amount_in, on_amount_out) = if *a2b {
-                                        (field_a as u64, field_b as u64)
-                                    } else {
-                                        (field_b as u64, field_a as u64)
-                                    };
+        // Turbos ComputeSwapState uses u128 fields (closed source — layout determined empirically):
+        // amount_a(u128), amount_b(u128), ...
+        // We can only verify amount_in/out, not sqrt_price_after (struct layout unknown).
+        assert!(bcs_bytes.len() >= 32, "unexpected return size: {} bytes", bcs_bytes.len());
 
-                                    println!("  Chain: amount_in={}, amount_out={} (field_a={}, field_b={})",
-                                        on_amount_in, on_amount_out, field_a, field_b);
+        let field_a = u128::from_le_bytes(bcs_bytes[0..16].try_into().unwrap());
+        let field_b = u128::from_le_bytes(bcs_bytes[16..32].try_into().unwrap());
 
-                                    // Local sim returns amount_in after fee deduction.
-                                    // Turbos returns the full input amount (including fee).
-                                    // So on-chain amount_in = local.amount_in + local.fee_total
-                                    let local_total_in = local.amount_in + local.fee_total;
-                                    let in_diff = (local_total_in as i64 - on_amount_in as i64).unsigned_abs();
-                                    let out_diff = (local.amount_out as i64 - on_amount_out as i64).unsigned_abs();
+        // For a2b: field_a = amount_a (input), field_b = amount_b (output)
+        // For b2a: field_a = amount_a (output), field_b = amount_b (input)
+        let (on_amount_in, on_amount_out) = if *a2b {
+            (field_a as u64, field_b as u64)
+        } else {
+            (field_b as u64, field_a as u64)
+        };
 
-                                    println!("  Local total_in (in+fee): {}", local_total_in);
-                                    println!("  Diff: amount_in={}, amount_out={}", in_diff, out_diff);
+        println!("  Chain: amount_in={}, amount_out={} (field_a={}, field_b={})",
+            on_amount_in, on_amount_out, field_a, field_b);
 
-                                    assert!(
-                                        in_diff <= 1,
-                                        "Turbos amount_in mismatch: local_total={} on-chain={} diff={}",
-                                        local_total_in, on_amount_in, in_diff
-                                    );
-                                    assert!(
-                                        out_diff <= 1,
-                                        "Turbos amount_out mismatch: local={} on-chain={} diff={}",
-                                        local.amount_out, on_amount_out, out_diff
-                                    );
+        // Local sim returns amount_in after fee deduction.
+        // Turbos returns the full input amount (including fee).
+        // So on-chain amount_in = local.amount_in + local.fee_total
+        let local_total_in = local.amount_in + local.fee_total;
+        let in_diff = local_total_in.abs_diff(on_amount_in);
+        let out_diff = local.amount_out.abs_diff(on_amount_out);
 
-                                    println!("  ✓ MATCH");
-                                } else {
-                                    println!("  Unexpected return size: {} bytes", bcs_bytes.len());
-                                    println!("  Raw: {:?}", bcs_bytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("  devInspect RPC error: {}", e);
-                // Don't panic for Turbos — the function may not be accessible
-                println!("  (Turbos is closed source — devInspect may fail)");
-            }
-        }
+        println!("  Local total_in (in+fee): {}", local_total_in);
+        println!("  Diff: amount_in={}, amount_out={}", in_diff, out_diff);
+
+        assert!(
+            in_diff <= 1,
+            "Turbos amount_in mismatch: local_total={} on-chain={} diff={}",
+            local_total_in, on_amount_in, in_diff
+        );
+        assert!(
+            out_diff <= 1,
+            "Turbos amount_out mismatch: local={} on-chain={} diff={}",
+            local.amount_out, on_amount_out, out_diff
+        );
+
+        println!("  ✓ MATCH");
     }
 }
 
