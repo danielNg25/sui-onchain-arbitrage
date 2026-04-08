@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `clmm-math` crate: pure Rust CLMM math library ported from CetusProtocol/cetus-clmm-interface Move contracts
+  - `tick_math` module: `tick_to_sqrt_price` and `sqrt_price_to_tick` using binary exponentiation with 19 precomputed ratio constants (Q64.64/Q96.96)
+  - `swap_math` module: `compute_swap_step`, `get_amount_a_delta`, `get_amount_b_delta`, `get_next_sqrt_price_from_input/output`
+  - `simulate` module: full multi-tick `simulate_swap` loop with tick crossing and liquidity updates
+  - `math_u256` module: u256 helpers (`mul_div_floor`, `mul_div_ceil`, `checked_shlw`, `div_round`) via `ethnum`
+  - 37 unit tests covering tick conversions, swap steps, multi-tick simulation, edge cases
+- Wired `clmm-math` into `dex-cetus` and `dex-turbos` `estimate_swap()` implementations (replaces Phase 2 placeholder stubs)
+
+### Changed
+- Turbos tick deserialization now computes `sqrt_price` via `clmm_math::tick_to_sqrt_price(tick_index)` instead of hardcoded `0`
+
+### Previously added
 - `arb-types` crate: shared types (Tick, CoinType, ObjectId, Dex, SwapEventData, SwapEstimate, AppConfig), hex helpers, config loading from TOML
 - `sui-client` crate: thin JSON-RPC wrapper using reqwest (get_object, multi_get_objects, get_dynamic_fields, query_events, dev_inspect, execute_tx, checkpoint queries)
 - `dex-common` crate: `DexRegistry` and `Pool` traits for DEX-agnostic pool management (supports CLMM, V2 AMM, orderbook), type string parsing

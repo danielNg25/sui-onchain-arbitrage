@@ -128,7 +128,7 @@ fn deserialize_turbos_tick(bcs_bytes: &[u8], tick_index: i32) -> Result<Option<T
         index: tick_index,
         liquidity_net,
         liquidity_gross,
-        sqrt_price: 0, // computed by clmm-math in Phase 2
+        sqrt_price: clmm_math::tick_to_sqrt_price(tick_index),
     }))
 }
 
