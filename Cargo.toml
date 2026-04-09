@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/arb-types",
+    "crates/clmm-math",
     "crates/sui-client",
     "crates/dex/common",
     "crates/dex/cetus",
@@ -11,6 +12,7 @@ members = [
 
 [workspace.dependencies]
 arb-types = { path = "crates/arb-types" }
+clmm-math = { path = "crates/clmm-math" }
 dex-common = { path = "crates/dex/common" }
 dex-cetus = { path = "crates/dex/cetus" }
 dex-turbos = { path = "crates/dex/turbos" }

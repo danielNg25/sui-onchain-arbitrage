@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 arb-types = { workspace = true }
+clmm-math = { workspace = true }
 dex-common = { workspace = true }
 sui-client = { workspace = true }
 bcs = { workspace = true }

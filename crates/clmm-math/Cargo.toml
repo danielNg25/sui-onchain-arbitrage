@@ -1,0 +1,9 @@
+[package]
+name = "clmm-math"
+version = "0.1.0"
+edition = "2021"
+description = "Pure CLMM math library for Sui DEX swap simulation"
+
+[dependencies]
+ethnum = "1"
+arb-types = { path = "../arb-types" }

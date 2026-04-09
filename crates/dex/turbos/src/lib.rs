@@ -112,12 +112,35 @@ impl Pool for TurbosPool {
 
     fn estimate_swap(
         &self,
-        _token_in: &CoinType,
-        _amount_in: u64,
+        token_in: &CoinType,
+        amount_in: u64,
     ) -> Result<SwapEstimate, ArbError> {
-        Err(ArbError::InvalidData(
-            "swap estimation requires clmm-math (Phase 2)".into(),
-        ))
+        let state = self.state.read().unwrap();
+        let ticks = self.ticks.read().unwrap();
+        let a_to_b = token_in == &self.coin_a;
+
+        let result = clmm_math::simulate_swap(
+            state.sqrt_price,
+            state.tick_current,
+            state.liquidity,
+            state.fee_rate,
+            state.tick_spacing,
+            &ticks,
+            a_to_b,
+            amount_in,
+        );
+
+        Ok(SwapEstimate {
+            token_in: token_in.clone(),
+            token_out: if a_to_b {
+                self.coin_b.clone()
+            } else {
+                self.coin_a.clone()
+            },
+            amount_in: result.amount_in,
+            amount_out: result.amount_out,
+            fee_amount: result.fee_total,
+        })
     }
 }
 
