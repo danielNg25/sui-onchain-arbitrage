@@ -1,0 +1,22 @@
+[package]
+name = "arb"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "arb"
+path = "src/main.rs"
+
+[dependencies]
+arb-types = { workspace = true }
+arb-engine = { workspace = true }
+dex-common = { workspace = true }
+dex-cetus = { workspace = true }
+dex-turbos = { workspace = true }
+pool-manager = { workspace = true }
+sui-client = { workspace = true }
+
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

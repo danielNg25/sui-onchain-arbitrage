@@ -1,0 +1,23 @@
+[package]
+name = "arb-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arb-types = { workspace = true }
+dex-common = { workspace = true }
+pool-manager = { workspace = true }
+
+dashmap = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+dex-cetus = { workspace = true }
+dex-turbos = { workspace = true }
+sui-client = { workspace = true }
+tokio = { workspace = true }

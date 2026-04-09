@@ -10,6 +10,49 @@ pub struct AppConfig {
     pub strategy: StrategyConfig,
 }
 
+// --- Pool Discovery ---
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PoolDiscoveryMode {
+    #[default]
+    Auto,
+    Preconfigured,
+    Both,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PreconfiguredPools {
+    #[serde(default)]
+    pub cetus: Vec<String>,
+    #[serde(default)]
+    pub turbos: Vec<String>,
+}
+
+// --- Profit Tokens ---
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProfitTokenConfig {
+    pub token: String,
+    pub symbol: String,
+    pub decimals: u8,
+    pub default_price_usd: f64,
+    pub min_profit: u64,
+    #[serde(default)]
+    pub gecko_pool_address: Option<String>,
+}
+
+// --- Search Strategy ---
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchStrategy {
+    Fast,
+    #[default]
+    Normal,
+    Thorough,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NetworkConfig {
     pub rpc_url: String,
@@ -56,6 +99,32 @@ pub struct StrategyConfig {
     pub binary_search_iterations: u32,
     pub poll_interval_ms: u64,
     pub whitelisted_tokens: Vec<String>,
+    #[serde(default)]
+    pub pool_discovery_mode: PoolDiscoveryMode,
+    #[serde(default)]
+    pub preconfigured_pools: Option<PreconfiguredPools>,
+    #[serde(default)]
+    pub profit_tokens: Vec<ProfitTokenConfig>,
+    #[serde(default = "default_min_profit_usd")]
+    pub min_profit_usd: f64,
+    #[serde(default = "default_price_update_interval")]
+    pub price_update_interval_secs: u64,
+    #[serde(default = "default_event_timeout")]
+    pub event_timeout_ms: u64,
+    #[serde(default)]
+    pub search_strategy: SearchStrategy,
+}
+
+fn default_min_profit_usd() -> f64 {
+    0.10
+}
+
+fn default_price_update_interval() -> u64 {
+    3600
+}
+
+fn default_event_timeout() -> u64 {
+    10_000
 }
 
 impl AppConfig {

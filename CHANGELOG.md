@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `arb-engine` crate: strategy engine for finding arbitrage opportunities
+  - `graph` module: token adjacency graph built from all discovered pools
+  - `cycle` module: DFS-based cycle detection with deduplication, profit token rotation, and pool-indexed lookup (O(1) per event)
+  - `profit_token` module: registry with GeckoTerminal price fetching, USD conversion, priority-based profit token selection
+  - `simulator` module: event-scoped simulation cache (DashMap), multi-leg cycle simulation via `Pool::estimate_swap`
+  - `search` module: two-phase golden-section search (strategic sampling + refinement) for optimal input amount
+  - `opportunity` module: ranked opportunity output with USD-denominated profit
+  - 18 unit tests covering graph construction, cycle detection, profit token math, simulation caching, search config
+  - 4 integration tests (ignored): mainnet graph build, cycle detection, engine initialization, cycle simulation
+- `bin/arb`: main binary scaffold with pool discovery, tick loading, engine initialization, and cycle breakdown logging
+- Extended `StrategyConfig` with Phase 3 fields: `pool_discovery_mode`, `preconfigured_pools`, `profit_tokens`, `min_profit_usd`, `price_update_interval_secs`, `event_timeout_ms`, `search_strategy`
+- New config types: `PoolDiscoveryMode`, `PreconfiguredPools`, `ProfitTokenConfig`, `SearchStrategy`
+- `docs/plans/phase3-strategy.md`: detailed implementation plan
+
+### Changed
+- Updated `config/mainnet.toml` with profit token definitions (SUI, USDC) and strategy parameters
+
 - `clmm-math` crate: pure Rust CLMM math library ported from CetusProtocol/cetus-clmm-interface Move contracts
   - `tick_math` module: `tick_to_sqrt_price` and `sqrt_price_to_tick` using binary exponentiation with 19 precomputed ratio constants (Q64.64/Q96.96)
   - `swap_math` module: `compute_swap_step`, `get_amount_a_delta`, `get_amount_b_delta`, `get_next_sqrt_price_from_input/output`

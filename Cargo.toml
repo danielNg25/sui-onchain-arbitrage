@@ -8,6 +8,8 @@ members = [
     "crates/dex/cetus",
     "crates/dex/turbos",
     "crates/pool-manager",
+    "crates/arb-engine",
+    "bin/arb",
 ]
 
 [workspace.dependencies]
@@ -18,6 +20,7 @@ dex-cetus = { path = "crates/dex/cetus" }
 dex-turbos = { path = "crates/dex/turbos" }
 sui-client = { path = "crates/sui-client" }
 pool-manager = { path = "crates/pool-manager" }
+arb-engine = { path = "crates/arb-engine" }
 
 anyhow = "1"
 thiserror = "2"
