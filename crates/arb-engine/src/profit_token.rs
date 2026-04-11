@@ -9,6 +9,25 @@ use tracing::{info, warn};
 
 use crate::error::EngineError;
 
+const GECKO_TERMINAL_BATCH_SIZE: usize = 30;
+const GECKO_TERMINAL_NETWORK: &str = "sui-network";
+
+/// GeckoTerminal simple token price response.
+#[derive(Debug, serde::Deserialize)]
+struct GeckoTerminalResponse {
+    data: GeckoTerminalData,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GeckoTerminalData {
+    attributes: GeckoTerminalAttributes,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GeckoTerminalAttributes {
+    token_prices: HashMap<String, Option<String>>,
+}
+
 /// A profit token with price tracking.
 #[derive(Debug, Clone)]
 pub struct ProfitToken {
@@ -17,7 +36,6 @@ pub struct ProfitToken {
     pub decimals: u8,
     pub default_price_usd: f64,
     pub min_profit_base_units: u64,
-    pub gecko_pool_address: Option<String>,
     /// Current USD price (updated by background task).
     pub price_usd: f64,
 }
@@ -63,7 +81,6 @@ impl ProfitTokenRegistry {
                 decimals: cfg.decimals,
                 default_price_usd: cfg.default_price_usd,
                 min_profit_base_units: cfg.min_profit,
-                gecko_pool_address: cfg.gecko_pool_address.clone(),
                 price_usd: cfg.default_price_usd,
             });
         }
@@ -126,19 +143,16 @@ impl ProfitTokenRegistry {
         Some(pt.to_usd(amount))
     }
 
-    /// Update prices from GeckoTerminal.
+    /// Update prices from GeckoTerminal using the simple token price endpoint.
+    /// Batches up to 30 token addresses per request, matching the EVM reference.
+    /// Uses the token's Move type string (e.g. "0x2::sui::SUI") as the address key.
+    /// On failure, retains the previous price (or default_price_usd).
     pub async fn update_prices(&self) -> Result<(), EngineError> {
         let tokens = self.tokens.read().await;
-        let mut updates: Vec<(usize, String)> = Vec::new();
-
-        for (i, pt) in tokens.iter().enumerate() {
-            if let Some(ref addr) = pt.gecko_pool_address {
-                updates.push((i, addr.clone()));
-            }
-        }
+        let token_types: Vec<CoinType> = tokens.iter().map(|pt| pt.token.clone()).collect();
         drop(tokens);
 
-        if updates.is_empty() {
+        if token_types.is_empty() {
             return Ok(());
         }
 
@@ -147,27 +161,74 @@ impl ProfitTokenRegistry {
             .build()
             .map_err(|e| EngineError::PriceFetch(e.to_string()))?;
 
-        for (idx, pool_address) in &updates {
-            match fetch_gecko_price(&client, pool_address).await {
-                Ok(price) => {
-                    let mut tokens = self.tokens.write().await;
-                    if let Some(pt) = tokens.get_mut(*idx) {
-                        info!(
-                            symbol = %pt.symbol,
-                            old_price = pt.price_usd,
-                            new_price = price,
-                            "updated profit token price"
-                        );
-                        pt.price_usd = price;
+        let mut all_prices: HashMap<String, f64> = HashMap::new();
+
+        for chunk in token_types.chunks(GECKO_TERMINAL_BATCH_SIZE) {
+            let address_str = chunk
+                .iter()
+                .map(|t| t.as_ref())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            info!(
+                count = chunk.len(),
+                "fetching prices from GeckoTerminal"
+            );
+
+            let url = format!(
+                "https://api.geckoterminal.com/api/v2/simple/networks/{}/token_price/{}",
+                GECKO_TERMINAL_NETWORK, address_str
+            );
+
+            let resp = client
+                .get(&url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(|e| EngineError::PriceFetch(e.to_string()))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                warn!(
+                    status = %status,
+                    body = %body,
+                    "GeckoTerminal API error, keeping previous prices"
+                );
+                continue;
+            }
+
+            let data: GeckoTerminalResponse = resp
+                .json()
+                .await
+                .map_err(|e| EngineError::PriceFetch(e.to_string()))?;
+
+            for token in chunk {
+                // GeckoTerminal returns keys matching the input token type string
+                if let Some(Some(price_str)) = data
+                    .data
+                    .attributes
+                    .token_prices
+                    .get(token.as_ref())
+                {
+                    if let Ok(price) = price_str.parse::<f64>() {
+                        all_prices.insert(token.to_string(), price);
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        pool_address = %pool_address,
-                        error = %e,
-                        "failed to fetch price, keeping previous value"
-                    );
-                }
+            }
+        }
+
+        // Apply fetched prices
+        let mut tokens = self.tokens.write().await;
+        for pt in tokens.iter_mut() {
+            if let Some(&price) = all_prices.get(pt.token.as_ref()) {
+                info!(
+                    symbol = %pt.symbol,
+                    old_price = pt.price_usd,
+                    new_price = price,
+                    "updated profit token price"
+                );
+                pt.price_usd = price;
             }
         }
 
@@ -192,48 +253,6 @@ impl ProfitTokenRegistry {
     }
 }
 
-/// Fetch token price from GeckoTerminal for a Sui pool.
-async fn fetch_gecko_price(
-    client: &reqwest::Client,
-    pool_address: &str,
-) -> Result<f64, EngineError> {
-    let url = format!(
-        "https://api.geckoterminal.com/api/v2/networks/sui/pools/{}",
-        pool_address
-    );
-
-    let resp = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| EngineError::PriceFetch(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(EngineError::PriceFetch(format!(
-            "HTTP {}",
-            resp.status()
-        )));
-    }
-
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| EngineError::PriceFetch(e.to_string()))?;
-
-    // Extract base_token_price_usd from response
-    let price_str = body
-        .pointer("/data/attributes/base_token_price_usd")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            EngineError::PriceFetch("missing base_token_price_usd in response".into())
-        })?;
-
-    price_str
-        .parse::<f64>()
-        .map_err(|e| EngineError::PriceFetch(format!("invalid price '{}': {}", price_str, e)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,7 +265,6 @@ mod tests {
                 decimals: 9,
                 default_price_usd: 1.50,
                 min_profit: 1_000_000,
-                gecko_pool_address: None,
             },
             ProfitTokenConfig {
                 token: "0xusdc::usdc::USDC".into(),
@@ -254,7 +272,6 @@ mod tests {
                 decimals: 6,
                 default_price_usd: 1.00,
                 min_profit: 100_000,
-                gecko_pool_address: None,
             },
         ])
     }
@@ -267,7 +284,6 @@ mod tests {
             decimals: 9,
             default_price_usd: 1.50,
             min_profit_base_units: 1_000_000,
-            gecko_pool_address: None,
             price_usd: 1.50,
         };
 
@@ -288,7 +304,6 @@ mod tests {
             decimals: 9,
             default_price_usd: 1.50,
             min_profit_base_units: 1_000_000,
-            gecko_pool_address: None,
             price_usd: 1.50,
         };
 
@@ -305,7 +320,6 @@ mod tests {
             decimals: 9,
             default_price_usd: 1.50,
             min_profit_base_units: 1_000_000,
-            gecko_pool_address: None,
             price_usd: 1.50,
         };
 
@@ -375,5 +389,45 @@ mod tests {
             .get_usd_value(&Arc::from("UNKNOWN"), 1_000_000)
             .await;
         assert!(usd.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_gecko_terminal_price_fetch() {
+        let registry = ProfitTokenRegistry::from_config(&[
+            ProfitTokenConfig {
+                token: "0x2::sui::SUI".into(),
+                symbol: "SUI".into(),
+                decimals: 9,
+                default_price_usd: 1.50,
+                min_profit: 1_000_000,
+            },
+            ProfitTokenConfig {
+                token: "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC".into(),
+                symbol: "USDC".into(),
+                decimals: 6,
+                default_price_usd: 1.00,
+                min_profit: 100_000,
+            },
+        ]);
+
+        registry.update_prices().await.unwrap();
+
+        // SUI price should be updated from default
+        let sui_price = {
+            let tokens = registry.tokens.read().await;
+            tokens[0].price_usd
+        };
+        println!("SUI price: ${:.4}", sui_price);
+        assert!(sui_price > 0.0, "SUI price should be positive");
+        assert!(sui_price != 1.50, "SUI price should have been updated from default");
+
+        // USDC price should be ~$1.00
+        let usdc_price = {
+            let tokens = registry.tokens.read().await;
+            tokens[1].price_usd
+        };
+        println!("USDC price: ${:.6}", usdc_price);
+        assert!((usdc_price - 1.0).abs() < 0.05, "USDC should be ~$1.00");
     }
 }

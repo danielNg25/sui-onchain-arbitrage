@@ -38,8 +38,6 @@ pub struct ProfitTokenConfig {
     pub decimals: u8,
     pub default_price_usd: f64,
     pub min_profit: u64,
-    #[serde(default)]
-    pub gecko_pool_address: Option<String>,
 }
 
 // --- Search Strategy ---
