@@ -1,4 +1,4 @@
-mod events;
+pub mod events;
 pub mod raw;
 mod ticks;
 

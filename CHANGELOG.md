@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- SwapEventData parsing from raw on-chain events for both Cetus and Turbos DEX crates
+  - `dex_cetus::events::parse_swap_event_data()` — extracts all fields from Cetus SwapEvent JSON
+  - `dex_turbos::events::parse_swap_event_data()` — extracts fields from Turbos SwapEvent JSON, derives amount_in/out from direction
+  - Unit tests for both parsers with known JSON fixtures
+- Event polling loop in `bin/arb`:
+  - Polls ALL 6 event types (swap + liquidity) to keep pool state in sync
+  - Applies events via `pool_manager.apply_event()` — zero RPC in the hot path
+  - Triggers `engine.process_event()` on swap events to detect arbitrage opportunities
+  - Logs detected opportunities with profit, USD value, and trigger pool
 - `arb-engine` crate: strategy engine for finding arbitrage opportunities
   - `graph` module: token adjacency graph built from all discovered pools
   - `cycle` module: DFS-based cycle detection with deduplication, profit token rotation, and pool-indexed lookup (O(1) per event)
