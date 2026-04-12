@@ -1,3 +1,5 @@
+pub mod collector;
+
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

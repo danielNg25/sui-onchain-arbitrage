@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Event collector service (`pool_manager::collector`) — reusable, decoupled from arb-engine
+  - `start_collector()` spawns async polling task, returns `CollectorHandle` for lifecycle control
+  - Callback via `mpsc::Sender<SwapEventData>` — consumer receives swap events on channel
+  - `SwapEventParser` closure keeps collector DEX-agnostic (caller provides parser)
+  - Applies ALL events (swap + liquidity) to pool state, zero RPC in hot path
 - SwapEventData parsing from raw on-chain events for both Cetus and Turbos DEX crates
   - `dex_cetus::events::parse_swap_event_data()` — extracts all fields from Cetus SwapEvent JSON
   - `dex_turbos::events::parse_swap_event_data()` — extracts fields from Turbos SwapEvent JSON, derives amount_in/out from direction
