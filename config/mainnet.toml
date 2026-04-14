@@ -35,7 +35,7 @@ binary_search_iterations = 20
 poll_interval_ms = 3000
 event_timeout_ms = 10_000
 search_strategy = "normal"
-pool_discovery_mode = "auto"
+pool_discovery_mode = "preconfigured"
 price_update_interval_secs = 3600
 whitelisted_tokens = [
     "0x2::sui::SUI",
@@ -61,5 +61,15 @@ default_price_usd = 1.00
 min_profit = 100_000
 
 [strategy.preconfigured_pools]
-cetus = []
-turbos = []
+cetus = [
+    "0xd978d331772a5b90d5a4781e1232d18afd12019d0c35db79e3674beeda8f9126",
+    "0x51e883ba7c0b566a26cbc8a94cd33eb0abd418a77cc1e60ad22fd9b1f29cd2ab",
+    "0xf4238fa592c9ed7f148fd091cb2c4147cb15ad81b797115ce42971923ebf6e4c",
+    "0xe01243f37f712ef87e556afb9b1d03d0fae13f96d324ec912daffc339dfdcbd2",
+    "0x72f5c6eef73d77de271886219a2543e7c29a33de19a6c69c5cf1899f729c3f17",
+]
+turbos = [
+    "0x0df4f02d0e210169cb6d5aabd03c3058328c06f2c4dbb0804faa041159c78443",
+    "0x198af6ff81028c6577e94465d534c4e2cfcbbab06a95724ece7011c55a9d1f5a",
+    "0x9490a13351e13b133bd8a9c309c47568d6fcbfcbfe7aac0e228b710053583081",
+]

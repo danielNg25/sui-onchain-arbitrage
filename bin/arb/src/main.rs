@@ -55,17 +55,47 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Create pool manager
-    let whitelisted: std::collections::HashSet<String> =
-        config.strategy.whitelisted_tokens.iter().cloned().collect();
     let pool_manager = pool_manager::PoolManager::new(sui_client.clone(), vec![cetus, turbos]);
 
-    // Discover pools
-    info!("discovering pools...");
-    let checkpoint = pool_manager.discover_all_pools(&whitelisted).await?;
+    // Load pools based on discovery mode
+    let checkpoint = match config.strategy.pool_discovery_mode {
+        arb_types::config::PoolDiscoveryMode::Preconfigured => {
+            let preconfigured = config.strategy.preconfigured_pools.as_ref()
+                .expect("preconfigured_pools required when pool_discovery_mode = preconfigured");
+            info!("loading preconfigured pools...");
+            // Registry order: [0]=cetus, [1]=turbos (matches vec![cetus, turbos] above)
+            let pool_ids_per_registry = vec![
+                preconfigured.cetus.clone(),
+                preconfigured.turbos.clone(),
+            ];
+            pool_manager.load_pools_by_id(&pool_ids_per_registry).await?
+        }
+        arb_types::config::PoolDiscoveryMode::Auto => {
+            let whitelisted: std::collections::HashSet<String> =
+                config.strategy.whitelisted_tokens.iter().cloned().collect();
+            info!("discovering pools (auto)...");
+            pool_manager.discover_all_pools(&whitelisted).await?
+        }
+        arb_types::config::PoolDiscoveryMode::Both => {
+            // Load preconfigured first, then discover remaining
+            if let Some(preconfigured) = &config.strategy.preconfigured_pools {
+                info!("loading preconfigured pools...");
+                let pool_ids_per_registry = vec![
+                    preconfigured.cetus.clone(),
+                    preconfigured.turbos.clone(),
+                ];
+                pool_manager.load_pools_by_id(&pool_ids_per_registry).await?;
+            }
+            let whitelisted: std::collections::HashSet<String> =
+                config.strategy.whitelisted_tokens.iter().cloned().collect();
+            info!("discovering additional pools (auto)...");
+            pool_manager.discover_all_pools(&whitelisted).await?
+        }
+    };
     info!(
         pools = pool_manager.pool_count(),
         checkpoint = checkpoint,
-        "pool discovery complete"
+        "pool loading complete"
     );
 
     // Fetch ticks for all pools (one-time RPC at startup)

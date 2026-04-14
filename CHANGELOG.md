@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Preconfigured pool loading: `pool_manager.load_pools_by_id()` fetches specific pools by ID, skipping slow event-based discovery
+- `bin/arb` supports `pool_discovery_mode` config: "preconfigured", "auto", or "both"
 - Event collector service (`pool_manager::collector`) — reusable, decoupled from arb-engine
   - `start_collector()` spawns async polling task, returns `CollectorHandle` for lifecycle control
   - Callback via `mpsc::Sender<SwapEventData>` — consumer receives swap events on channel
