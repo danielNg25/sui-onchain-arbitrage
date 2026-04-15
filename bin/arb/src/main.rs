@@ -98,21 +98,25 @@ async fn main() -> anyhow::Result<()> {
         "pool loading complete"
     );
 
-    // Fetch ticks for all pools (one-time RPC at startup)
+    // Fetch ticks for all pools in parallel (one-time RPC at startup)
     info!("fetching tick data for all pools...");
-    let mut tick_ok = 0u32;
-    let mut tick_err = 0u32;
+    let mut tick_futures = Vec::new();
     for registry in pool_manager.registries() {
         for pool_id in registry.pool_ids() {
             if let Some(pool) = registry.pool(&pool_id) {
-                match pool.fetch_price_data(&sui_client).await {
-                    Ok(()) => tick_ok += 1,
-                    Err(e) => {
-                        debug!(pool = %object_id_to_hex(&pool_id), error = %e, "tick fetch failed");
-                        tick_err += 1;
-                    }
-                }
+                let client = sui_client.clone();
+                tick_futures.push(async move {
+                    pool.fetch_price_data(&client).await
+                });
             }
+        }
+    }
+    let results = futures::future::join_all(tick_futures).await;
+    let tick_ok = results.iter().filter(|r| r.is_ok()).count();
+    let tick_err = results.iter().filter(|r| r.is_err()).count();
+    for r in &results {
+        if let Err(e) = r {
+            debug!(error = %e, "tick fetch failed");
         }
     }
     info!(ok = tick_ok, errors = tick_err, "tick data loaded");
