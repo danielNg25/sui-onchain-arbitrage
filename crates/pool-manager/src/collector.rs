@@ -84,10 +84,32 @@ async fn collector_loop(
 ) {
     let poll_interval = std::time::Duration::from_millis(config.poll_interval_ms);
 
-    // Track cursor per event type for pagination
+    // Bootstrap cursors: skip to latest event for each type so we only
+    // process NEW events, not replay the entire on-chain history.
     let mut cursors: HashMap<String, Option<EventCursor>> = HashMap::new();
-    for et in &config.event_types {
-        cursors.insert(et.clone(), None);
+    for event_type in &config.event_types {
+        match client
+            .query_events(
+                EventFilter::MoveEventType(event_type.clone()),
+                None,
+                Some(1),
+                true, // descending — get the most recent event
+            )
+            .await
+        {
+            Ok(page) => {
+                if let Some(event) = page.data.first() {
+                    cursors.insert(event_type.clone(), Some(event.id.clone()));
+                    debug!(event_type = %event_type, "bootstrapped cursor to latest event");
+                } else {
+                    cursors.insert(event_type.clone(), None);
+                }
+            }
+            Err(e) => {
+                warn!(event_type = %event_type, error = %e, "failed to bootstrap cursor, starting from beginning");
+                cursors.insert(event_type.clone(), None);
+            }
+        }
     }
 
     let mut total_events_applied = 0u64;
