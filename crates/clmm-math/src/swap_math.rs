@@ -43,10 +43,24 @@ pub fn compute_swap_step(
         };
     }
 
+    // If price is already past the target (stale state or rounding),
+    // return zero — the caller will skip this step gracefully.
     if a_to_b {
-        assert!(sqrt_price_current >= sqrt_price_target);
-    } else {
-        assert!(sqrt_price_current < sqrt_price_target);
+        if sqrt_price_current < sqrt_price_target {
+            return SwapStepResult {
+                sqrt_price_next: sqrt_price_current,
+                amount_in: 0,
+                amount_out: 0,
+                fee_amount: 0,
+            };
+        }
+    } else if sqrt_price_current >= sqrt_price_target {
+        return SwapStepResult {
+            sqrt_price_next: sqrt_price_current,
+            amount_in: 0,
+            amount_out: 0,
+            fee_amount: 0,
+        };
     }
 
     if by_amount_in {
