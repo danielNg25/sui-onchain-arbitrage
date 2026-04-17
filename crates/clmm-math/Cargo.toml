@@ -7,3 +7,4 @@ description = "Pure CLMM math library for Sui DEX swap simulation"
 [dependencies]
 ethnum = "1"
 arb-types = { path = "../arb-types" }
+thiserror = { workspace = true }

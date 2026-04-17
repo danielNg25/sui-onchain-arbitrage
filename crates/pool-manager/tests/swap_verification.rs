@@ -293,7 +293,8 @@ async fn verify_cetus_simulate_vs_onchain() {
             &ticks,
             *a2b,
             *amount,
-        );
+        )
+        .expect("local simulation failed");
 
         println!("  Local: amount_in={}, amount_out={}, fee={}, sqrt_after={}",
             local.amount_in, local.amount_out, local.fee_total, local.sqrt_price_after);
@@ -433,7 +434,8 @@ async fn verify_turbos_simulate_vs_onchain() {
             &ticks,
             *a2b,
             *amount,
-        );
+        )
+        .expect("local simulation failed");
 
         println!("  Local: amount_in={}, amount_out={}, fee={}, sqrt_after={}",
             local.amount_in, local.amount_out, local.fee_total, local.sqrt_price_after);

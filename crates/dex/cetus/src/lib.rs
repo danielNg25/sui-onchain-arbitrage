@@ -124,28 +124,16 @@ impl Pool for CetusPool {
         let ticks = self.ticks.read().unwrap();
         let a_to_b = token_in == &self.coin_a;
 
-        let sqrt_price = state.sqrt_price;
-        let tick_current = state.tick_current;
-        let liquidity = state.liquidity;
-        let fee_rate = state.fee_rate;
-        let tick_spacing = state.tick_spacing;
-        let ticks_clone = ticks.clone();
-        drop(ticks);
-        drop(state);
-
-        let result = std::panic::catch_unwind(|| {
-            clmm_math::simulate_swap(
-                sqrt_price,
-                tick_current,
-                liquidity,
-                fee_rate,
-                tick_spacing,
-                &ticks_clone,
-                a_to_b,
-                amount_in,
-            )
-        })
-        .map_err(|_| ArbError::InvalidData("swap simulation overflow".into()))?;
+        let result = clmm_math::simulate_swap(
+            state.sqrt_price,
+            state.tick_current,
+            state.liquidity,
+            state.fee_rate,
+            state.tick_spacing,
+            &ticks,
+            a_to_b,
+            amount_in,
+        )?;
 
         Ok(SwapEstimate {
             token_in: token_in.clone(),
