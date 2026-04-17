@@ -1,11 +1,13 @@
+pub mod error;
 pub mod math_u256;
-pub mod tick_math;
-pub mod swap_math;
 pub mod simulate;
+pub mod swap_math;
+pub mod tick_math;
 
-pub use tick_math::{tick_to_sqrt_price, sqrt_price_to_tick};
-pub use swap_math::{compute_swap_step, SwapStepResult};
+pub use error::MathError;
 pub use simulate::{simulate_swap, SwapResult};
+pub use swap_math::{compute_swap_step, SwapStepResult};
+pub use tick_math::{sqrt_price_to_tick, tick_to_sqrt_price};
 
 /// Fee rate denominator (1,000,000 = 100%). Fee rate is in PPM.
 pub const FEE_RATE_DENOMINATOR: u64 = 1_000_000;

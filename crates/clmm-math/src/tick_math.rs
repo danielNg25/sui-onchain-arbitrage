@@ -1,3 +1,4 @@
+use crate::error::MathError;
 use crate::math_u256::mul_shr_u128;
 use crate::{MAX_SQRT_PRICE, MAX_TICK, MIN_SQRT_PRICE, MIN_TICK};
 
@@ -5,15 +6,14 @@ use crate::{MAX_SQRT_PRICE, MAX_TICK, MIN_SQRT_PRICE, MIN_TICK};
 ///
 /// Ported from CetusProtocol/cetus-clmm-interface tick_math.move.
 /// Uses binary exponentiation with precomputed ratio constants.
-pub fn tick_to_sqrt_price(tick: i32) -> u128 {
-    assert!(
-        (MIN_TICK..=MAX_TICK).contains(&tick),
-        "tick out of bounds: {tick}"
-    );
+pub fn tick_to_sqrt_price(tick: i32) -> Result<u128, MathError> {
+    if !(MIN_TICK..=MAX_TICK).contains(&tick) {
+        return Err(MathError::TickOutOfBounds(tick));
+    }
     if tick < 0 {
-        sqrt_price_at_negative_tick(tick)
+        Ok(sqrt_price_at_negative_tick(tick))
     } else {
-        sqrt_price_at_positive_tick(tick)
+        Ok(sqrt_price_at_positive_tick(tick))
     }
 }
 
@@ -21,11 +21,10 @@ pub fn tick_to_sqrt_price(tick: i32) -> u128 {
 ///
 /// Ported from CetusProtocol/cetus-clmm-interface tick_math.move.
 /// Uses MSB detection + log2 approximation with 14 bits of precision.
-pub fn sqrt_price_to_tick(sqrt_price: u128) -> i32 {
-    assert!(
-        (MIN_SQRT_PRICE..=MAX_SQRT_PRICE).contains(&sqrt_price),
-        "sqrt_price out of bounds: {sqrt_price}"
-    );
+pub fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32, MathError> {
+    if !(MIN_SQRT_PRICE..=MAX_SQRT_PRICE).contains(&sqrt_price) {
+        return Err(MathError::SqrtPriceOutOfBounds(sqrt_price));
+    }
 
     // Find MSB (most significant bit)
     let mut r = sqrt_price;
@@ -87,11 +86,11 @@ pub fn sqrt_price_to_tick(sqrt_price: u128) -> i32 {
     let tick_high = ((log_sqrt_10001 + 15_793_534_762_490_258_745i128) >> 64) as i32;
 
     if tick_low == tick_high {
-        tick_low
-    } else if tick_to_sqrt_price(tick_high) <= sqrt_price {
-        tick_high
+        Ok(tick_low)
+    } else if tick_to_sqrt_price(tick_high)? <= sqrt_price {
+        Ok(tick_high)
     } else {
-        tick_low
+        Ok(tick_low)
     }
 }
 
@@ -239,45 +238,43 @@ mod tests {
     #[test]
     fn test_tick_0() {
         // tick 0 = price 1.0 = 2^64 in Q64.64
-        let sqrt_price = tick_to_sqrt_price(0);
+        let sqrt_price = tick_to_sqrt_price(0).unwrap();
         assert_eq!(sqrt_price, 1u128 << 64);
     }
 
     #[test]
     fn test_min_tick() {
-        assert_eq!(tick_to_sqrt_price(MIN_TICK), MIN_SQRT_PRICE);
+        assert_eq!(tick_to_sqrt_price(MIN_TICK).unwrap(), MIN_SQRT_PRICE);
     }
 
     #[test]
     fn test_max_tick() {
-        assert_eq!(tick_to_sqrt_price(MAX_TICK), MAX_SQRT_PRICE);
+        assert_eq!(tick_to_sqrt_price(MAX_TICK).unwrap(), MAX_SQRT_PRICE);
     }
 
     #[test]
     fn test_known_negative_tick() {
-        // From Cetus test: tick -435444 => sqrt_price 6469134034
-        assert_eq!(tick_to_sqrt_price(-435_444), 6_469_134_034);
+        assert_eq!(tick_to_sqrt_price(-435_444).unwrap(), 6_469_134_034);
     }
 
     #[test]
     fn test_known_positive_tick() {
-        // From Cetus test: tick 408332 => sqrt_price 13561044167458152057771544136
         assert_eq!(
-            tick_to_sqrt_price(408_332),
+            tick_to_sqrt_price(408_332).unwrap(),
             13_561_044_167_458_152_057_771_544_136
         );
     }
 
     #[test]
     fn test_round_trip_zero() {
-        assert_eq!(sqrt_price_to_tick(tick_to_sqrt_price(0)), 0);
+        assert_eq!(sqrt_price_to_tick(tick_to_sqrt_price(0).unwrap()).unwrap(), 0);
     }
 
     #[test]
     fn test_round_trip_positive() {
         for t in [1, 10, 100, 1000, 10000, 100000, 443636] {
-            let sp = tick_to_sqrt_price(t);
-            let recovered = sqrt_price_to_tick(sp);
+            let sp = tick_to_sqrt_price(t).unwrap();
+            let recovered = sqrt_price_to_tick(sp).unwrap();
             assert_eq!(recovered, t, "round-trip failed for tick {t}");
         }
     }
@@ -285,53 +282,60 @@ mod tests {
     #[test]
     fn test_round_trip_negative() {
         for t in [-1, -10, -100, -1000, -10000, -100000, -443636] {
-            let sp = tick_to_sqrt_price(t);
-            let recovered = sqrt_price_to_tick(sp);
+            let sp = tick_to_sqrt_price(t).unwrap();
+            let recovered = sqrt_price_to_tick(sp).unwrap();
             assert_eq!(recovered, t, "round-trip failed for tick {t}");
         }
     }
 
     #[test]
     fn test_sqrt_price_to_tick_known() {
-        assert_eq!(sqrt_price_to_tick(6_469_134_034), -435_444);
+        assert_eq!(sqrt_price_to_tick(6_469_134_034).unwrap(), -435_444);
         assert_eq!(
-            sqrt_price_to_tick(13_561_044_167_458_152_057_771_544_136),
+            sqrt_price_to_tick(13_561_044_167_458_152_057_771_544_136).unwrap(),
             408_332
         );
     }
 
     #[test]
     fn test_tick_spacing_multiples() {
-        // Common tick spacings: 2, 10, 20, 60, 200
         for spacing in [2, 10, 20, 60, 200] {
             let tick = spacing * 100;
-            let sp = tick_to_sqrt_price(tick);
-            let recovered = sqrt_price_to_tick(sp);
+            let sp = tick_to_sqrt_price(tick).unwrap();
+            let recovered = sqrt_price_to_tick(sp).unwrap();
             assert_eq!(recovered, tick);
         }
     }
 
     #[test]
-    #[should_panic]
     fn test_tick_out_of_bounds_high() {
-        tick_to_sqrt_price(MAX_TICK + 1);
+        assert!(matches!(
+            tick_to_sqrt_price(MAX_TICK + 1),
+            Err(MathError::TickOutOfBounds(_))
+        ));
     }
 
     #[test]
-    #[should_panic]
     fn test_tick_out_of_bounds_low() {
-        tick_to_sqrt_price(MIN_TICK - 1);
+        assert!(matches!(
+            tick_to_sqrt_price(MIN_TICK - 1),
+            Err(MathError::TickOutOfBounds(_))
+        ));
     }
 
     #[test]
-    #[should_panic]
     fn test_sqrt_price_out_of_bounds_high() {
-        sqrt_price_to_tick(MAX_SQRT_PRICE + 1);
+        assert!(matches!(
+            sqrt_price_to_tick(MAX_SQRT_PRICE + 1),
+            Err(MathError::SqrtPriceOutOfBounds(_))
+        ));
     }
 
     #[test]
-    #[should_panic]
     fn test_sqrt_price_out_of_bounds_low() {
-        sqrt_price_to_tick(MIN_SQRT_PRICE - 1);
+        assert!(matches!(
+            sqrt_price_to_tick(MIN_SQRT_PRICE - 1),
+            Err(MathError::SqrtPriceOutOfBounds(_))
+        ));
     }
 }

@@ -1,4 +1,4 @@
-mod events;
+pub mod events;
 pub mod raw;
 mod ticks;
 
@@ -133,7 +133,7 @@ impl Pool for CetusPool {
             &ticks,
             a_to_b,
             amount_in,
-        );
+        )?;
 
         Ok(SwapEstimate {
             token_in: token_in.clone(),

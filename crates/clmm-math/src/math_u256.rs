@@ -1,5 +1,27 @@
 use ethnum::U256;
 
+use crate::error::MathError;
+
+/// Convert U256 to u64, checking for overflow.
+#[inline(always)]
+pub fn u256_to_u64(v: U256, ctx: &'static str) -> Result<u64, MathError> {
+    if v > U256::from(u64::MAX) {
+        Err(MathError::Truncation(ctx))
+    } else {
+        Ok(v.as_u64())
+    }
+}
+
+/// Convert U256 to u128, checking for overflow.
+#[inline(always)]
+pub fn u256_to_u128(v: U256, ctx: &'static str) -> Result<u128, MathError> {
+    if v > U256::from(u128::MAX) {
+        Err(MathError::Truncation(ctx))
+    } else {
+        Ok(v.as_u128())
+    }
+}
+
 /// Multiply two u128 values and return a U256 result.
 #[inline(always)]
 pub fn full_mul_u128(a: u128, b: u128) -> U256 {

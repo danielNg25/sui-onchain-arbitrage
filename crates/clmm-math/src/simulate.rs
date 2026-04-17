@@ -1,5 +1,6 @@
 use arb_types::tick::Tick;
 
+use crate::error::MathError;
 use crate::swap_math::compute_swap_step;
 use crate::tick_math::tick_to_sqrt_price;
 use crate::{MAX_SQRT_PRICE, MIN_SQRT_PRICE};
@@ -17,13 +18,25 @@ pub struct SwapResult {
     pub is_exceed: bool,
 }
 
+/// Apply a signed liquidity delta, checking for over/underflow.
+fn apply_liquidity_delta(liquidity: u128, net: i128) -> Result<u128, MathError> {
+    if net >= 0 {
+        liquidity
+            .checked_add(net as u128)
+            .ok_or(MathError::LiquidityOverflow("liquidity add"))
+    } else {
+        let abs = net.unsigned_abs();
+        liquidity
+            .checked_sub(abs)
+            .ok_or(MathError::LiquidityOverflow("liquidity sub"))
+    }
+}
+
 /// Simulate a full swap across multiple ticks.
 ///
 /// `ticks` must be sorted by index ascending with sqrt_price populated.
 /// `a_to_b`: true = sell token A (price decreases), false = sell token B (price increases).
 /// `amount`: input amount to swap (by_amount_in = true).
-///
-/// Returns the full swap result including amount_in, amount_out, fees, and final state.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_swap(
     sqrt_price: u128,
@@ -34,7 +47,7 @@ pub fn simulate_swap(
     ticks: &[Tick],
     a_to_b: bool,
     amount: u64,
-) -> SwapResult {
+) -> Result<SwapResult, MathError> {
     let mut current_sqrt_price = sqrt_price;
     let mut current_liquidity = liquidity;
     let mut amount_remaining = amount;
@@ -44,7 +57,6 @@ pub fn simulate_swap(
     let mut steps: u32 = 0;
     let mut current_tick = tick_current;
 
-    // sqrt_price_limit: go as far as possible
     let sqrt_price_limit = if a_to_b {
         MIN_SQRT_PRICE
     } else {
@@ -52,7 +64,6 @@ pub fn simulate_swap(
     };
 
     while amount_remaining > 0 && current_sqrt_price != sqrt_price_limit {
-        // Find the next initialized tick in direction of travel
         let next_tick = find_next_initialized_tick(ticks, current_tick, a_to_b);
 
         let (_next_tick_index, next_tick_sqrt_price) = match next_tick {
@@ -60,12 +71,11 @@ pub fn simulate_swap(
                 let sp = if tick.sqrt_price != 0 {
                     tick.sqrt_price
                 } else {
-                    tick_to_sqrt_price(tick.index)
+                    tick_to_sqrt_price(tick.index)?
                 };
                 (tick.index, sp)
             }
             None => {
-                // No more initialized ticks — use boundary
                 if a_to_b {
                     (crate::MIN_TICK, MIN_SQRT_PRICE)
                 } else {
@@ -74,7 +84,6 @@ pub fn simulate_swap(
             }
         };
 
-        // Clamp target to limit
         let target_sqrt_price = if a_to_b {
             next_tick_sqrt_price.max(sqrt_price_limit)
         } else {
@@ -88,8 +97,8 @@ pub fn simulate_swap(
             amount_remaining,
             fee_rate,
             a_to_b,
-            true, // by_amount_in
-        );
+            true,
+        )?;
 
         total_amount_in = total_amount_in.saturating_add(step.amount_in);
         total_amount_out = total_amount_out.saturating_add(step.amount_out);
@@ -98,29 +107,30 @@ pub fn simulate_swap(
             .saturating_sub(step.amount_in)
             .saturating_sub(step.fee_amount);
 
+        // If the step made no progress (stale state / zero-output), stop to avoid infinite loop.
+        if step.amount_in == 0 && step.amount_out == 0 && step.sqrt_price_next == current_sqrt_price {
+            break;
+        }
+
         current_sqrt_price = step.sqrt_price_next;
 
-        // If we reached the target tick, cross it (update liquidity)
         if let Some(tick) = next_tick.filter(|_| step.sqrt_price_next == target_sqrt_price) {
             if a_to_b {
-                // Crossing downward: subtract liquidity_net
-                current_liquidity = (current_liquidity as i128 - tick.liquidity_net) as u128;
+                current_liquidity = apply_liquidity_delta(current_liquidity, -tick.liquidity_net)?;
                 current_tick = tick.index - 1;
             } else {
-                // Crossing upward: add liquidity_net
-                current_liquidity = (current_liquidity as i128 + tick.liquidity_net) as u128;
+                current_liquidity = apply_liquidity_delta(current_liquidity, tick.liquidity_net)?;
                 current_tick = tick.index;
             }
             steps += 1;
         } else {
-            // Didn't reach the tick — partial fill, derive tick from price
-            current_tick = crate::tick_math::sqrt_price_to_tick(current_sqrt_price);
+            current_tick = crate::tick_math::sqrt_price_to_tick(current_sqrt_price)?;
         }
     }
 
     let is_exceed = amount_remaining > 0;
 
-    SwapResult {
+    Ok(SwapResult {
         amount_in: total_amount_in,
         amount_out: total_amount_out,
         fee_total: total_fee,
@@ -129,7 +139,7 @@ pub fn simulate_swap(
         liquidity_after: current_liquidity,
         steps,
         is_exceed,
-    }
+    })
 }
 
 /// Find the next initialized tick in direction of travel.
@@ -141,7 +151,6 @@ fn find_next_initialized_tick(ticks: &[Tick], current_tick: i32, a_to_b: bool) -
     }
 
     if a_to_b {
-        // Binary search: find rightmost tick with index <= current_tick
         let pos = ticks.partition_point(|t| t.index <= current_tick);
         if pos > 0 {
             Some(&ticks[pos - 1])
@@ -149,7 +158,6 @@ fn find_next_initialized_tick(ticks: &[Tick], current_tick: i32, a_to_b: bool) -
             None
         }
     } else {
-        // Binary search: find leftmost tick with index > current_tick
         let pos = ticks.partition_point(|t| t.index <= current_tick);
         if pos < ticks.len() {
             Some(&ticks[pos])
@@ -165,19 +173,18 @@ mod tests {
     use crate::tick_math::tick_to_sqrt_price;
 
     fn make_simple_ticks() -> Vec<Tick> {
-        // Pool around tick 0 with liquidity from -200 to +200
         vec![
             Tick {
                 index: -200,
                 liquidity_net: 1_000_000_000_000,
                 liquidity_gross: 1_000_000_000_000,
-                sqrt_price: tick_to_sqrt_price(-200),
+                sqrt_price: tick_to_sqrt_price(-200).unwrap(),
             },
             Tick {
                 index: 200,
                 liquidity_net: -1_000_000_000_000,
                 liquidity_gross: 1_000_000_000_000,
-                sqrt_price: tick_to_sqrt_price(200),
+                sqrt_price: tick_to_sqrt_price(200).unwrap(),
             },
         ]
     }
@@ -186,108 +193,108 @@ mod tests {
     fn test_simulate_single_tick_a2b() {
         let ticks = make_simple_ticks();
         let result = simulate_swap(
-            tick_to_sqrt_price(0),
+            tick_to_sqrt_price(0).unwrap(),
             0,
-            1_000_000_000_000, // active liquidity
-            2500,              // 0.25% fee
+            1_000_000_000_000,
+            2500,
             60,
             &ticks,
-            true,  // a_to_b
-            1_000, // small amount
-        );
+            true,
+            1_000,
+        )
+        .unwrap();
 
         assert!(result.amount_in > 0);
         assert!(result.amount_out > 0);
         assert!(result.fee_total > 0);
         assert!(!result.is_exceed);
-        assert!(result.sqrt_price_after < tick_to_sqrt_price(0)); // price decreased
+        assert!(result.sqrt_price_after < tick_to_sqrt_price(0).unwrap());
     }
 
     #[test]
     fn test_simulate_single_tick_b2a() {
         let ticks = make_simple_ticks();
         let result = simulate_swap(
-            tick_to_sqrt_price(0),
+            tick_to_sqrt_price(0).unwrap(),
             0,
             1_000_000_000_000,
             2500,
             60,
             &ticks,
-            false, // b_to_a
+            false,
             1_000,
-        );
+        )
+        .unwrap();
 
         assert!(result.amount_in > 0);
         assert!(result.amount_out > 0);
-        assert!(result.sqrt_price_after > tick_to_sqrt_price(0)); // price increased
+        assert!(result.sqrt_price_after > tick_to_sqrt_price(0).unwrap());
     }
 
     #[test]
     fn test_simulate_multi_tick_crossing() {
-        // Multiple tick ranges with small liquidity so swaps cross ticks easily
         let ticks = vec![
             Tick {
                 index: -600,
                 liquidity_net: 1_000_000,
                 liquidity_gross: 1_000_000,
-                sqrt_price: tick_to_sqrt_price(-600),
+                sqrt_price: tick_to_sqrt_price(-600).unwrap(),
             },
             Tick {
                 index: -200,
                 liquidity_net: 1_000_000,
                 liquidity_gross: 1_000_000,
-                sqrt_price: tick_to_sqrt_price(-200),
+                sqrt_price: tick_to_sqrt_price(-200).unwrap(),
             },
             Tick {
                 index: 200,
                 liquidity_net: -1_000_000,
                 liquidity_gross: 1_000_000,
-                sqrt_price: tick_to_sqrt_price(200),
+                sqrt_price: tick_to_sqrt_price(200).unwrap(),
             },
             Tick {
                 index: 600,
                 liquidity_net: -1_000_000,
                 liquidity_gross: 1_000_000,
-                sqrt_price: tick_to_sqrt_price(600),
+                sqrt_price: tick_to_sqrt_price(600).unwrap(),
             },
         ];
 
-        // Swap with small liquidity so we definitely cross ticks
         let result = simulate_swap(
-            tick_to_sqrt_price(0),
+            tick_to_sqrt_price(0).unwrap(),
             0,
-            2_000_000, // active liquidity (sum of both ranges at tick 0)
+            2_000_000,
             2500,
             60,
             &ticks,
             true,
-            1_000_000_000, // 1B — should cross multiple ticks with low liquidity
-        );
+            1_000_000_000,
+        )
+        .unwrap();
 
         assert!(result.amount_out > 0);
-        assert!(result.steps >= 1, "expected at least one tick crossing, got steps={}", result.steps);
+        assert!(result.steps >= 1);
     }
 
     #[test]
     fn test_simulate_exhausts_liquidity() {
-        // Tiny liquidity, large swap
         let ticks = vec![
             Tick {
                 index: -200,
                 liquidity_net: 100,
                 liquidity_gross: 100,
-                sqrt_price: tick_to_sqrt_price(-200),
+                sqrt_price: tick_to_sqrt_price(-200).unwrap(),
             },
             Tick {
                 index: 200,
                 liquidity_net: -100,
                 liquidity_gross: 100,
-                sqrt_price: tick_to_sqrt_price(200),
+                sqrt_price: tick_to_sqrt_price(200).unwrap(),
             },
         ];
 
         let result = simulate_swap(
-            tick_to_sqrt_price(0),
+            tick_to_sqrt_price(0).unwrap(),
             0,
             100,
             2500,
@@ -295,7 +302,8 @@ mod tests {
             &ticks,
             true,
             u64::MAX / 2,
-        );
+        )
+        .unwrap();
 
         assert!(result.is_exceed);
     }
@@ -304,7 +312,7 @@ mod tests {
     fn test_simulate_zero_amount() {
         let ticks = make_simple_ticks();
         let result = simulate_swap(
-            tick_to_sqrt_price(0),
+            tick_to_sqrt_price(0).unwrap(),
             0,
             1_000_000_000_000,
             2500,
@@ -312,7 +320,8 @@ mod tests {
             &ticks,
             true,
             0,
-        );
+        )
+        .unwrap();
 
         assert_eq!(result.amount_in, 0);
         assert_eq!(result.amount_out, 0);
@@ -336,9 +345,7 @@ mod tests {
     #[test]
     fn test_find_next_tick_none() {
         let ticks = make_simple_ticks();
-        // No tick below -200
         assert!(find_next_initialized_tick(&ticks, -201, true).is_none());
-        // No tick above 200
         assert!(find_next_initialized_tick(&ticks, 200, false).is_none());
     }
 }

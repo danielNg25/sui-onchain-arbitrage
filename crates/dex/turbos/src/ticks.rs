@@ -124,11 +124,14 @@ fn deserialize_turbos_tick(bcs_bytes: &[u8], tick_index: i32) -> Result<Option<T
     let liquidity_net_bits = u128::from_le_bytes(tick_data[pos..pos + 16].try_into().unwrap());
     let liquidity_net = liquidity_net_bits as i128;
 
+    let sqrt_price = clmm_math::tick_to_sqrt_price(tick_index)
+        .map_err(|e| ArbError::InvalidData(format!("Turbos tick sqrt_price: {}", e)))?;
+
     Ok(Some(Tick {
         index: tick_index,
         liquidity_net,
         liquidity_gross,
-        sqrt_price: clmm_math::tick_to_sqrt_price(tick_index),
+        sqrt_price,
     }))
 }
 
